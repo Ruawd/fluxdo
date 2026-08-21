@@ -2,9 +2,8 @@ import 'dart:convert';
 
 import 'site_customization.dart';
 import 'sites/idcflare.dart';
-import 'sites/linuxdo.dart';
 
-/// 一个可切换的 Discourse 社区。
+/// IDC Flare 的 Discourse 站点配置。
 class DiscourseSite {
   const DiscourseSite({
     required this.id,
@@ -68,16 +67,13 @@ class DiscourseSite {
     return normalized == host || normalized.endsWith('.$host');
   }
 
-  /// Linux.do 沿用历史 key，确保升级后不丢登录态和缓存；新增站点加后缀隔离。
+  /// 专用版始终使用独立命名空间，避免与原 FluxDO 的数据互相覆盖。
   String scopedStorageKey(String legacyKey) {
-    return id == DiscourseSiteRegistry.linuxDoId
-        ? legacyKey
-        : '${legacyKey}_$id';
+    return '${legacyKey}_$id';
   }
 
   /// Hive/Notion/书签等按账号保存的数据同时加入站点维度。
   String scopedAccountId(String username) {
-    if (id == DiscourseSiteRegistry.linuxDoId) return username;
     final encodedUsername = base64Url
         .encode(utf8.encode(username))
         .replaceAll('=', '');
@@ -88,31 +84,12 @@ class DiscourseSite {
   }
 }
 
-/// 内置社区注册表。
+/// 专用版站点注册表。Linux.do 仅是网页登录中的 OAuth 身份提供方，不是
+/// 应用可进入的社区，因此不会出现在这里。
 class DiscourseSiteRegistry {
   DiscourseSiteRegistry._();
 
-  static const String linuxDoId = 'linuxdo';
   static const String idcFlareId = 'idcflare';
-
-  static final DiscourseSite linuxDo = DiscourseSite(
-    id: linuxDoId,
-    displayName: 'Linux.do',
-    shortName: 'LINUX.DO',
-    baseUrl: 'https://linux.do',
-    description: '真诚、友善、团结、专业的技术社区',
-    customization: linuxdoCustomization,
-    supportsNativePasswordLogin: true,
-    supportsBrowserAuthorizationLogin: true,
-    supportsQrLogin: true,
-    supportsChat: true,
-    supportsLinuxDoEcosystem: true,
-    supportsConnectStats: true,
-    supportsSeeking: true,
-    supportsLdcRewards: true,
-    preferredLoginPath: '/login',
-    challengePath: '/challenge',
-  );
 
   static const DiscourseSite idcFlare = DiscourseSite(
     id: idcFlareId,
@@ -134,9 +111,9 @@ class DiscourseSiteRegistry {
     challengePath: '/',
   );
 
-  static final List<DiscourseSite> all = [linuxDo, idcFlare];
+  static const List<DiscourseSite> all = [idcFlare];
 
-  static DiscourseSite get defaultSite => linuxDo;
+  static DiscourseSite get defaultSite => idcFlare;
 
   static DiscourseSite? byId(String? id) {
     if (id == null) return null;

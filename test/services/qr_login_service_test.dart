@@ -15,7 +15,7 @@ void main() {
         expiresAt: exp,
       );
       final raw = service.encodePayload(payload);
-      expect(raw.startsWith('fluxdo://qr-login?'), isTrue);
+      expect(raw.startsWith('idcflare://qr-login?'), isTrue);
       expect(raw.contains('k='), isTrue);
       expect(raw.contains('o='), isTrue);
 
@@ -47,14 +47,14 @@ void main() {
       expect(parsed.isExpired, isFalse);
     });
 
-    test('reject non fluxdo scheme and v1 token payload', () {
+    test('reject non IDC Flare scheme and v1 token payload', () {
       expect(service.parsePayload('https://linux.do/t/1'), isNull);
       expect(service.parsePayload('fluxdo://topic/1'), isNull);
       expect(service.parsePayload('not a uri'), isNull);
       // 旧 v1 `_t` 协议不再接受
       expect(
         service.parsePayload(
-          'fluxdo://qr-login?v=1&t=oldtoken&u=alice&exp=9999999999999',
+          'idcflare://qr-login?v=1&t=oldtoken&u=alice&exp=9999999999999',
         ),
         isNull,
       );

@@ -6,13 +6,8 @@ import '../pages/user_profile_page.dart';
 import '../pages/webview_login_page.dart';
 import '../pages/webview_page.dart';
 import '../constants.dart';
-import '../config/discourse_site.dart';
 import '../utils/discourse_url_parser.dart';
 import 'discourse/discourse_service.dart';
-import 'user_api_key_login_flow.dart';
-import 'user_api_key_service.dart';
-import 'active_site_service.dart';
-import 'site_switch_coordinator.dart';
 
 /// Deep Link 服务
 /// 处理从外部链接打开应用的场景
@@ -102,48 +97,14 @@ class DeepLinkService {
 
     debugPrint('DeepLinkService: 收到链接 $url');
 
-    // 链接属于另一个已注册社区时先切站，再用新 ProviderScope 的 context
-    // 打开原生页面，避免把 IDC Flare 的 topicId 请求到 Linux.do。
-    if (uri.scheme == 'http' || uri.scheme == 'https') {
-      final linkedSite = DiscourseSiteRegistry.byHost(uri.host);
-      if (linkedSite != null &&
-          linkedSite.id != ActiveSiteService.instance.current.id) {
-        final oldContext = _navigatorContext;
-        final result = await SiteSwitchCoordinator.instance.switchTo(
-          linkedSite,
-        );
-        if (result != SiteSwitchResult.switched &&
-            result != SiteSwitchResult.unchanged) {
-          debugPrint(
-            'DeepLinkService: 无法切换到 ${linkedSite.displayName}: $result',
-          );
-          return;
-        }
-        for (var i = 0; i < 12; i++) {
-          final next = _navigatorContext;
-          if (next != null && next.mounted && !identical(next, oldContext)) {
-            break;
-          }
-          await Future<void>.delayed(const Duration(milliseconds: 100));
-        }
-      }
-    }
-
     final context = _navigatorContext;
     if (context == null || !context.mounted) {
-      debugPrint('DeepLinkService: 切换后导航 context 尚未就绪');
+      debugPrint('DeepLinkService: 导航 context 尚未就绪');
       return;
     }
 
-    // 浏览器授权登录回调:discourse://auth_redirect?payload=...
-    // (discourse:// 是站点 auth_redirect 默认白名单 scheme,App 已注册)
-    if (UserApiKeyService().isAuthRedirect(uri)) {
-      UserApiKeyLoginFlow.instance.handleCallback(uri);
-      return;
-    }
-
-    // 自定义 scheme (fluxdo://...)
-    if (uri.scheme == 'fluxdo') {
+    // 专用版自定义 scheme (idcflare://...)
+    if (uri.scheme == 'idcflare') {
       _handleCustomScheme(context, uri);
       return;
     }
@@ -198,9 +159,9 @@ class DeepLinkService {
 
   /// 处理自定义 scheme
   /// 支持格式：
-  /// - fluxdo://topic/123
-  /// - fluxdo://topic/123/5 (指定楼层)
-  /// - fluxdo://user/username
+  /// - idcflare://topic/123
+  /// - idcflare://topic/123/5 (指定楼层)
+  /// - idcflare://user/username
   void _handleCustomScheme(BuildContext context, Uri uri) {
     final pathSegments = [
       if (uri.host.isNotEmpty) uri.host,
@@ -295,10 +256,8 @@ class DeepLinkService {
   }
 
   static bool _canHandleUri(Uri uri) {
-    if (uri.scheme == 'fluxdo') return true;
-    // 浏览器授权登录回调(仅 auth_redirect,不接管其他 discourse:// 链接)
-    if (uri.scheme == 'discourse' && uri.host == 'auth_redirect') return true;
+    if (uri.scheme == 'idcflare') return true;
     if (uri.scheme != 'http' && uri.scheme != 'https') return false;
-    return DiscourseSiteRegistry.byHost(uri.host) != null;
+    return AppConstants.site.matchesHost(uri.host);
   }
 }

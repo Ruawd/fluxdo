@@ -28,7 +28,6 @@ import '../services/login_ready_coordinator.dart';
 import 'package:common_ui/common_ui.dart';
 import '../l10n/s.dart';
 import '../utils/dialog_utils.dart';
-import '../config/discourse_site.dart';
 
 /// WebView 登录页面（统一使用 flutter_inappwebview）
 class WebViewLoginPage extends ConsumerStatefulWidget {
@@ -278,10 +277,6 @@ class _WebViewLoginPageState extends ConsumerState<WebViewLoginPage> {
                         _recheckCount = 0;
                         await WebViewSettings.injectScrollFix(controller);
                         _injectFingerprintHook(controller);
-                        await _syncIdentityProviderSession(
-                          controller,
-                          url?.toString(),
-                        );
                         // 自动填充登录表单
                         await _autoFillLoginForm(controller, url);
                         // 自动检测登录状态
@@ -580,31 +575,6 @@ class _WebViewLoginPageState extends ConsumerState<WebViewLoginPage> {
       }
     } finally {
       _loginInProgress = false;
-    }
-  }
-
-  /// IDC Flare 通过 Linux.do OAuth 登录。授权页中 Linux.do 的会话可能刚
-  /// 完成续签；把核心登录 Cookie 按 Linux.do 域写回持久 jar，之后切回
-  /// Linux.do 时仍能恢复该账号，同时不会把它当作 IDC Flare 的登录态。
-  Future<void> _syncIdentityProviderSession(
-    InAppWebViewController controller,
-    String? currentUrl,
-  ) async {
-    final uri = Uri.tryParse(currentUrl ?? '');
-    if (uri == null) return;
-    final linkedSite = DiscourseSiteRegistry.byHost(uri.host);
-    if (linkedSite == null || linkedSite.id == AppConstants.site.id) return;
-
-    try {
-      await BoundarySyncService.instance.syncFromWebView(
-        currentUrl: currentUrl,
-        controller: controller,
-        cookieNames: CookieJarService.authCookieNames,
-        allowLowConfidenceSessionCookies: true,
-        requestGeneration: _flowGeneration,
-      );
-    } catch (e) {
-      debugPrint('[Login] 同步 ${linkedSite.displayName} 授权会话失败: $e');
     }
   }
 

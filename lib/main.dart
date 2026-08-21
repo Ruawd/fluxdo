@@ -269,7 +269,7 @@ Future<void> main() async {
     AppConstants.initUserAgent(),
     LogWriter.init(),
     ProxyCertificate.initialize(),
-    // Windows 深链协议注册(discourse:// / fluxdo://):写 HKCU 免管理员,
+    // Windows 深链协议注册(idcflare://):写 HKCU 免管理员,
     // 幂等,失败不阻塞启动。其他平台由清单/plist 声明,此调用为 no-op。
     if (Platform.isWindows) ensureWindowsProtocolsRegistered(),
     CookieJarService().initialize(),
@@ -563,80 +563,22 @@ Future<void> main() async {
   );
 }
 
-/// 站点切换边界。
-///
-/// 每个社区拥有独立的 Riverpod 容器。切换时销毁旧容器可以一次性终止列表、
-/// 通知、聊天等 provider 的订阅与缓存，避免逐个 invalidate 漏项或串站。
-class SiteScopeHost extends StatefulWidget {
+/// IDC Flare 的 Riverpod 容器。
+class SiteScopeHost extends StatelessWidget {
   const SiteScopeHost({super.key, required this.preferences});
 
   final SharedPreferences preferences;
 
   @override
-  State<SiteScopeHost> createState() => _SiteScopeHostState();
-}
-
-class _SiteScopeHostState extends State<SiteScopeHost> {
-  bool _detachingOldSite = false;
-
-  @override
-  void initState() {
-    super.initState();
-    ActiveSiteService.instance.activeSiteNotifier.addListener(_onSiteChanged);
-    ActiveSiteService.instance.transitionNotifier.addListener(
-      _onTransitionChanged,
-    );
-  }
-
-  @override
-  void dispose() {
-    ActiveSiteService.instance.activeSiteNotifier.removeListener(
-      _onSiteChanged,
-    );
-    ActiveSiteService.instance.transitionNotifier.removeListener(
-      _onTransitionChanged,
-    );
-    super.dispose();
-  }
-
-  void _onSiteChanged() {
-    if (!mounted ||
-        _detachingOldSite ||
-        ActiveSiteService.instance.transitionNotifier.value) {
-      return;
-    }
-
-    // MaterialApp 使用全局 navigatorKey。若在同一帧直接换 ProviderScope，
-    // Flutter 会按 GlobalKey 把旧 Navigator（连同旧路由和 MainPage State）
-    // 搬到新站点，而不是销毁它。先空一帧让旧 Navigator 完整卸载，下一帧
-    // 再挂目标站点，确保手工 Riverpod 订阅和页面栈都不会串站。
-    setState(() => _detachingOldSite = true);
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted) return;
-      setState(() => _detachingOldSite = false);
-    });
-  }
-
-  void _onTransitionChanged() {
-    if (!mounted) return;
-    setState(() {});
-  }
-
-  @override
   Widget build(BuildContext context) {
-    if (_detachingOldSite ||
-        ActiveSiteService.instance.transitionNotifier.value) {
-      return const SizedBox.expand();
-    }
     final site = ActiveSiteService.instance.current;
     return ProviderScope(
       key: ValueKey('site-scope-${site.id}'),
-      // 禁用 Riverpod 3 默认的自动重试机制。网络不通时自动重试会在两个
-      // 社区之间切换时放大旧请求残留。
+      // 禁用 Riverpod 3 默认的自动重试机制，避免断网时请求风暴。
       retry: (_, _) => null,
       overrides: [
-        sharedPreferencesProvider.overrideWithValue(widget.preferences),
-        aiSharedPreferencesProvider.overrideWithValue(widget.preferences),
+        sharedPreferencesProvider.overrideWithValue(preferences),
+        aiSharedPreferencesProvider.overrideWithValue(preferences),
         aiDioAdapterFactoryProvider.overrideWithValue(
           createExternalHttpAdapter,
         ),
@@ -850,7 +792,7 @@ class MainApp extends ConsumerWidget {
                 JankNavObserver(),
                 EscFallbackObserver(),
               ],
-              title: 'FluxDO · ${AppConstants.site.displayName}',
+              title: 'IDC Flare',
               locale: TranslationProvider.of(context).flutterLocale,
               localizationsDelegates: const [
                 GlobalMaterialLocalizations.delegate,

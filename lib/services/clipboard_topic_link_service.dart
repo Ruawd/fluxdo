@@ -1,7 +1,7 @@
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-import '../config/discourse_site.dart';
+import '../constants.dart';
 import '../utils/discourse_url_parser.dart';
 
 class ClipboardTopicLinkCandidate {
@@ -25,7 +25,7 @@ class ClipboardTopicLinkService {
       'pref_clipboard_topic_link_last_prompted_hash';
 
   static final RegExp _communityUrlRegex = RegExp(
-    r'(?:(?:https?:)?//)?(?:www\.)?(?:linux\.do|idcflare\.com)(?::\d+)?/[^\s<>"\]\)）}】》]+',
+    r'(?:(?:https?:)?//)?(?:www\.)?idcflare\.com(?::\d+)?/[^\s<>"\]\)）}】》]+',
     caseSensitive: false,
   );
 
@@ -167,7 +167,7 @@ class ClipboardTopicLinkService {
   }
 
   static bool _isAllowedHost(String host) {
-    return DiscourseSiteRegistry.byHost(host) != null;
+    return AppConstants.site.matchesHost(host);
   }
 
   static bool _isSupportedTopicPath(String path) {

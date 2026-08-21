@@ -31,9 +31,7 @@ import '../utils/discourse_url_parser.dart';
 import '../widgets/common/search_capsule.dart';
 import '../utils/link_launcher.dart';
 import 'settings_page.dart';
-import '../config/discourse_site.dart';
-import '../services/active_site_service.dart';
-import '../services/deep_link_service.dart';
+import '../constants.dart';
 
 /// 搜索框中的站内直达链接标准化。支持完整 URL、已注册社区域名和相对路径；
 /// 普通关键词原样返回，后续由 [isInternalUrlString] 判定后继续普通搜索。
@@ -44,7 +42,7 @@ String normalizeDirectSearchLink(String rawValue) {
   final schemeless = Uri.tryParse('https://$value');
   if (value.contains('/') &&
       schemeless != null &&
-      DiscourseSiteRegistry.byHost(schemeless.host) != null) {
+      AppConstants.site.matchesHost(schemeless.host)) {
     return 'https://$value';
   }
   return value;
@@ -320,17 +318,6 @@ class _SearchPageState extends ConsumerState<SearchPage> {
 
   bool _tryOpenInternalLink(String rawValue) {
     final normalized = normalizeDirectSearchLink(rawValue);
-    final uri = Uri.tryParse(normalized);
-    final linkedSite = uri == null
-        ? null
-        : DiscourseSiteRegistry.byHost(uri.host);
-    if (uri != null &&
-        linkedSite != null &&
-        linkedSite.id != ActiveSiteService.instance.current.id) {
-      DeepLinkService.instance.handleUri(uri);
-      _focusNode.unfocus();
-      return true;
-    }
     if (!isInternalUrlString(normalized)) return false;
 
     final topic = DiscourseUrlParser.parseTopic(normalized);

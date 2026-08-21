@@ -42,7 +42,6 @@ import '../widgets/cdk_balance_card.dart';
 import '../widgets/profile_stats_card.dart';
 import '../widgets/common/spotlight_overlay.dart';
 import 'profile_stats_edit_page.dart';
-import 'site_switch_page.dart';
 import '../services/ldc_oauth_service.dart';
 import '../services/cdk_oauth_service.dart';
 import '../l10n/s.dart';
@@ -911,15 +910,6 @@ class _ProfilePageState extends ConsumerState<ProfilePage> {
     return SegmentedCardGroup(
       children: [
         _buildOptionTile(
-          icon: Symbols.hub_rounded,
-          iconColor: Colors.indigo,
-          title: context.l10n.settings_community,
-          onTap: () => Navigator.push(
-            context,
-            MaterialPageRoute(builder: (_) => const SiteSwitchPage()),
-          ),
-        ),
-        _buildOptionTile(
           icon: Symbols.language_rounded,
           iconColor: Colors.blue,
           title: context.l10n.profile_myBrowser,
@@ -1096,7 +1086,7 @@ class _ProfileHeader extends ConsumerWidget {
             _ProfileAvatarSection(userId: userId, isLoggedIn: isLoggedIn),
             const SizedBox(width: 20),
             const Expanded(child: _ProfileInfoSection()),
-            if (isLoggedIn) ...[
+            if (isLoggedIn && AppConstants.site.supportsQrLogin) ...[
               Tooltip(
                 message: context.l10n.login_qrShowCode,
                 child: GestureDetector(
@@ -1116,6 +1106,8 @@ class _ProfileHeader extends ConsumerWidget {
                 ),
               ),
               const SizedBox(width: 8),
+            ],
+            if (isLoggedIn) ...[
               CircleAvatar(
                 radius: 16,
                 backgroundColor: Theme.of(

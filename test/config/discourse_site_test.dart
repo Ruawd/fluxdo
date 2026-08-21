@@ -8,33 +8,24 @@ void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
   group('DiscourseSiteRegistry', () {
-    test('按主域和子域识别社区，但不接受相似后缀域名', () {
-      expect(
-        DiscourseSiteRegistry.byHost('linux.do')?.id,
-        DiscourseSiteRegistry.linuxDoId,
-      );
-      expect(
-        DiscourseSiteRegistry.byHost('connect.linux.do')?.id,
-        DiscourseSiteRegistry.linuxDoId,
-      );
+    test('只识别 IDC Flare 主域和子域', () {
       expect(
         DiscourseSiteRegistry.byHost('www.idcflare.com')?.id,
         DiscourseSiteRegistry.idcFlareId,
       );
+      expect(DiscourseSiteRegistry.byHost('linux.do'), isNull);
+      expect(DiscourseSiteRegistry.byHost('connect.linux.do'), isNull);
       expect(DiscourseSiteRegistry.byHost('notlinux.do'), isNull);
       expect(DiscourseSiteRegistry.byHost('idcflare.com.example.com'), isNull);
+      expect(DiscourseSiteRegistry.all, [DiscourseSiteRegistry.idcFlare]);
+      expect(DiscourseSiteRegistry.defaultSite, DiscourseSiteRegistry.idcFlare);
     });
 
-    test('登录入口和功能开关符合两个站点的能力', () {
-      expect(
-        DiscourseSiteRegistry.linuxDo.preferredLoginUrl,
-        'https://linux.do/login',
-      );
+    test('登录入口和功能开关符合 IDC Flare 能力', () {
       expect(
         DiscourseSiteRegistry.idcFlare.preferredLoginUrl,
         'https://idcflare.com/auth/oauth2_basic',
       );
-      expect(DiscourseSiteRegistry.linuxDo.supportsChat, isTrue);
       expect(DiscourseSiteRegistry.idcFlare.supportsChat, isFalse);
       expect(
         DiscourseSiteRegistry.idcFlare.supportsNativePasswordLogin,
@@ -42,23 +33,14 @@ void main() {
       );
     });
 
-    test('Linux.do 沿用旧存储键，IDC Flare 使用独立命名空间', () {
-      expect(
-        DiscourseSiteRegistry.linuxDo.scopedStorageKey('current_user_cache'),
-        'current_user_cache',
-      );
+    test('IDC Flare 使用独立存储和账号命名空间', () {
       expect(
         DiscourseSiteRegistry.idcFlare.scopedStorageKey('current_user_cache'),
         'current_user_cache_idcflare',
       );
-      expect(DiscourseSiteRegistry.linuxDo.scopedAccountId('alice'), 'alice');
       expect(
         DiscourseSiteRegistry.idcFlare.scopedAccountId('alice'),
         'fluxdo_scoped_account_id_v1__idcflare__YWxpY2U',
-      );
-      expect(
-        DiscourseSiteRegistry.idcFlare.scopedAccountId('alice'),
-        isNot(DiscourseSiteRegistry.linuxDo.scopedAccountId('alice')),
       );
     });
 
@@ -75,9 +57,9 @@ void main() {
     });
   });
 
-  test('ActiveSiteService 启动恢复选择，并在 publish 时才通知 UI', () async {
+  test('ActiveSiteService 忽略历史站点并固定为 IDC Flare', () async {
     SharedPreferences.setMockInitialValues({
-      ActiveSiteService.preferenceKey: DiscourseSiteRegistry.idcFlareId,
+      ActiveSiteService.preferenceKey: 'linuxdo',
     });
     final prefs = await SharedPreferences.getInstance();
     final service = ActiveSiteService.instance;
@@ -85,25 +67,8 @@ void main() {
 
     expect(service.current.id, DiscourseSiteRegistry.idcFlareId);
     expect(
-      service.activeSiteNotifier.value.id,
-      DiscourseSiteRegistry.idcFlareId,
-    );
-
-    await service.stage(DiscourseSiteRegistry.linuxDo);
-    expect(service.current.id, DiscourseSiteRegistry.linuxDoId);
-    expect(
-      service.activeSiteNotifier.value.id,
-      DiscourseSiteRegistry.idcFlareId,
-    );
-
-    service.publish();
-    expect(
-      service.activeSiteNotifier.value.id,
-      DiscourseSiteRegistry.linuxDoId,
-    );
-    expect(
       prefs.getString(ActiveSiteService.preferenceKey),
-      DiscourseSiteRegistry.linuxDoId,
+      DiscourseSiteRegistry.idcFlareId,
     );
   });
 }

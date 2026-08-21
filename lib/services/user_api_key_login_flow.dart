@@ -4,12 +4,10 @@ import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 
-import '../config/discourse_site.dart';
 import 'active_site_service.dart';
 import 'discourse/discourse_service.dart';
 import 'local_notification_service.dart' show navigatorKey;
 import 'network/cookie/cookie_jar_service.dart';
-import 'site_switch_coordinator.dart';
 import 'toast_service.dart';
 import 'user_api_key_service.dart';
 import 'package:m3e_ui/m3e_ui.dart';
@@ -38,7 +36,6 @@ class UserApiKeyLoginFlow {
 
   bool _handling = false;
   OverlayEntry? _loadingEntry;
-  DiscourseSite? _flowSite;
 
   /// 深链回到 App 后,兑换+收口这段有网络耗时(可能还含 CF 验证),
   /// 用全局 overlay 给用户一个"正在完成登录"的反馈,避免看起来卡死。
@@ -61,13 +58,12 @@ class UserApiKeyLoginFlow {
   /// 首次调用会懒生成 RSA 密钥对(isolate,可能耗时数秒)。
   Future<bool> start() async {
     final site = ActiveSiteService.instance.current;
-    _flowSite = site;
     final authorizeUrl = await UserApiKeyService.forSite(
       site,
     ).buildAuthorizeUrl();
     try {
       // Android 用 Custom Tabs(inAppBrowserView),不用 externalApplication:
-      // Chrome 对已建立 App Links 关联的域名(fluxdo 已 autoVerify linux.do)会把
+      // Android 用 Custom Tabs 避免外部浏览器把已关联链接立刻弹回应用。
       // externalApplication 打开的链接直接弹回本 app,表现为"浏览器一闪就跳回"
       // (仅 Chrome 有此行为,换其他浏览器正常)。Custom Tabs 在 app 上下文内打开,
       // 不触发该回弹,且共享 Chrome cookie 复用浏览器登录态(OAuth 标准做法)。
@@ -87,54 +83,14 @@ class UserApiKeyLoginFlow {
     if (_handling) return;
     _handling = true;
     try {
-      final preferredSite = _flowSite ?? ActiveSiteService.instance.current;
-      if (_flowSite != null &&
-          preferredSite.id != ActiveSiteService.instance.current.id) {
-        final switchResult = await SiteSwitchCoordinator.instance.switchTo(
-          preferredSite,
-        );
-        if (switchResult != SiteSwitchResult.switched &&
-            switchResult != SiteSwitchResult.unchanged) {
-          ToastService.showError('无法切换到 ${preferredSite.displayName} 完成授权');
-          return;
-        }
-      }
-      final candidateSites = <DiscourseSite>[
-        preferredSite,
-        for (final site in DiscourseSiteRegistry.all)
-          if (site.id != preferredSite.id &&
-              site.supportsBrowserAuthorizationLogin)
-            site,
-      ];
-
-      DiscourseSite? callbackSite;
-      UserApiKeyService? userApiKeyService;
-      ({bool ok, String? otp, bool stale})? result;
-      for (final site in candidateSites) {
-        final candidateService = UserApiKeyService.forSite(site);
-        final candidateResult = await candidateService.handleAuthRedirect(uri);
-        if (candidateResult.stale) continue;
-        callbackSite = site;
-        userApiKeyService = candidateService;
-        result = candidateResult;
-        break;
-      }
+      final callbackSite = ActiveSiteService.instance.current;
+      final userApiKeyService = UserApiKeyService.forSite(callbackSite);
+      final result = await userApiKeyService.handleAuthRedirect(uri);
       // 冷启动 getInitialLink 会重放上次的 auth_redirect 深链;非本次授权流程
       // (nonce 已消费/不匹配)静默忽略,不弹 toast、不通知登录页。
-      if (result == null || callbackSite == null || userApiKeyService == null) {
+      if (result.stale) {
         debugPrint('[UserApiKeyLoginFlow] 忽略残留授权回调');
         return;
-      }
-      _flowSite = null;
-      if (callbackSite.id != ActiveSiteService.instance.current.id) {
-        final switchResult = await SiteSwitchCoordinator.instance.switchTo(
-          callbackSite,
-        );
-        if (switchResult != SiteSwitchResult.switched &&
-            switchResult != SiteSwitchResult.unchanged) {
-          ToastService.showError('无法切换到 ${callbackSite.displayName} 完成授权');
-          return;
-        }
       }
       if (!result.ok) {
         ToastService.showError('授权回调解析失败,请重新授权');

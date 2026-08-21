@@ -20,14 +20,14 @@ Widget _layoutProbe(Size size) {
 }
 
 void main() {
-  test('搜索框标准化无协议的 L 站链接', () {
+  test('搜索框只标准化无协议的 IDC Flare 链接', () {
     expect(
       normalizeDirectSearchLink('linux.do/t/topic/123/4'),
-      'https://linux.do/t/topic/123/4',
+      'linux.do/t/topic/123/4',
     );
     expect(
       normalizeDirectSearchLink('www.linux.do/u/alice'),
-      'https://www.linux.do/u/alice',
+      'www.linux.do/u/alice',
     );
     expect(
       normalizeDirectSearchLink('idcflare.com/t/topic/456'),

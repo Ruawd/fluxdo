@@ -52,12 +52,12 @@ jobs:
           cp -R build/ios/iphoneos/Runner.app build/ios/iphoneos/Payload/
           (
             cd build/ios/iphoneos
-            zip -r fluxdo-unsigned.ipa Payload
+            zip -r idcflare-unsigned.ipa Payload
           )
-          mv build/ios/iphoneos/fluxdo-unsigned.ipa dist/
+          mv build/ios/iphoneos/idcflare-unsigned.ipa dist/
           (
             cd dist
-            shasum -a 256 fluxdo-unsigned.ipa > fluxdo-unsigned.ipa.sha256
+            shasum -a 256 idcflare-unsigned.ipa > idcflare-unsigned.ipa.sha256
           )
 
       - name: Upload workflow artifact
@@ -80,9 +80,9 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          name: Fluxdo v${{ steps.version.outputs.version }} iOS
+          name: IDC Flare v${{ steps.version.outputs.version }} iOS
           body: |
-            Fluxdo ${{ steps.version.outputs.version }} unsigned iOS IPA.
+            IDC Flare ${{ steps.version.outputs.version }} unsigned iOS IPA.
 
             Use AltStore, SideStore or another signing tool to self-sign before installation.
           files: dist/*

@@ -1,7 +1,7 @@
 name: fluxdo
 description: "A new Flutter project."
 publish_to: 'none'
-version: 0.2.27+2026082110
+version: 0.2.28+2026082101
 
 environment:
   sdk: ^3.10.4
@@ -111,7 +111,7 @@ dependencies:
   # User API Key 授权自愈:RSA 密钥对生成/PKCS1 解密(payload 与 OTP 均为
   # 服务端用客户端公钥加密回传,见 discourse user_api_keys_controller)
   pointycastle: ^4.0.0
-  # Windows 深链前提:discourse://、fluxdo:// 协议需写入 HKCU 注册表
+  # Windows 深链前提:idcflare:// 协议需写入 HKCU 注册表
   # (3.x 被 device_info_plus 12.3.0 的 ^2.1.0 约束挡住,升级时一并跟进)
   win32_registry: ^2.1.0
   path_provider: ^2.1.5
@@ -254,9 +254,6 @@ flutter:
         # Flutter 3.41+ FontWeight 会映射到 wght variation axis，因此即使
         # 不显式声明 weight，TextStyle(fontWeight: FontWeight.wXXX) 也能精准命中。
         - asset: assets/fonts/MiSansVF.ttf
-
-
-
 
 
 

@@ -22,13 +22,13 @@
     -->
     <uses-permission android:name="android.permission.CREDENTIAL_MANAGER_SET_ORIGIN"/>
     <application
-        android:label="FluxDO"
-        android:name=".FluxdoApplication"
+        android:label="IDC Flare"
+        android:name="com.github.lingyan000.fluxdo.FluxdoApplication"
         android:icon="@mipmap/ic_launcher"
         android:enableOnBackInvokedCallback="true"
         android:networkSecurityConfig="@xml/network_security_config">
         <activity
-            android:name=".MainActivity"
+            android:name="com.github.lingyan000.fluxdo.MainActivity"
             android:exported="true"
             android:launchMode="singleTask"
             android:theme="@style/LaunchTheme"
@@ -51,21 +51,9 @@
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
-                <data android:scheme="fluxdo-launch" />
+                <data android:scheme="idcflare-launch" />
             </intent-filter>
-            <!-- Deep Links for linux.do - 话题链接 -->
-            <intent-filter android:autoVerify="true">
-                <action android:name="android.intent.action.VIEW" />
-                <category android:name="android.intent.category.DEFAULT" />
-                <category android:name="android.intent.category.BROWSABLE" />
-                <data android:scheme="https" android:host="linux.do" android:pathPrefix="/t/" />
-            </intent-filter>
-            <intent-filter>
-                <action android:name="android.intent.action.VIEW" />
-                <category android:name="android.intent.category.DEFAULT" />
-                <category android:name="android.intent.category.BROWSABLE" />
-                <data android:scheme="http" android:host="linux.do" android:pathPrefix="/t/" />
-            </intent-filter>
+            <!-- Deep Links for IDC Flare - 话题链接 -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
@@ -73,19 +61,7 @@
                 <data android:scheme="https" android:host="idcflare.com" android:pathPrefix="/t/" />
                 <data android:scheme="http" android:host="idcflare.com" android:pathPrefix="/t/" />
             </intent-filter>
-            <!-- Deep Links for linux.do - 用户链接 -->
-            <intent-filter android:autoVerify="true">
-                <action android:name="android.intent.action.VIEW" />
-                <category android:name="android.intent.category.DEFAULT" />
-                <category android:name="android.intent.category.BROWSABLE" />
-                <data android:scheme="https" android:host="linux.do" android:pathPrefix="/u/" />
-            </intent-filter>
-            <intent-filter>
-                <action android:name="android.intent.action.VIEW" />
-                <category android:name="android.intent.category.DEFAULT" />
-                <category android:name="android.intent.category.BROWSABLE" />
-                <data android:scheme="http" android:host="linux.do" android:pathPrefix="/u/" />
-            </intent-filter>
+            <!-- Deep Links for IDC Flare - 用户链接 -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
@@ -93,19 +69,7 @@
                 <data android:scheme="https" android:host="idcflare.com" android:pathPrefix="/u/" />
                 <data android:scheme="http" android:host="idcflare.com" android:pathPrefix="/u/" />
             </intent-filter>
-            <!-- Deep Links for linux.do - 邮箱链接登录 -->
-            <intent-filter android:autoVerify="true">
-                <action android:name="android.intent.action.VIEW" />
-                <category android:name="android.intent.category.DEFAULT" />
-                <category android:name="android.intent.category.BROWSABLE" />
-                <data android:scheme="https" android:host="linux.do" android:pathPrefix="/session/email-login/" />
-            </intent-filter>
-            <intent-filter>
-                <action android:name="android.intent.action.VIEW" />
-                <category android:name="android.intent.category.DEFAULT" />
-                <category android:name="android.intent.category.BROWSABLE" />
-                <data android:scheme="http" android:host="linux.do" android:pathPrefix="/session/email-login/" />
-            </intent-filter>
+            <!-- Deep Links for IDC Flare - 邮箱链接登录 -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
@@ -118,11 +82,7 @@
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
-                <data android:scheme="fluxdo" />
-                <!-- 浏览器授权登录回调:discourse://auth_redirect 为
-                     Discourse 站点 allowed_user_api_auth_redirects 默认白名单,
-                     无需站方加白(DiscourseHub 同款流程) -->
-                <data android:scheme="discourse" />
+                <data android:scheme="idcflare" />
             </intent-filter>
         </activity>
         <!-- 经典图标（默认启动入口） -->
@@ -131,7 +91,7 @@
             android:enabled="true"
             android:exported="true"
             android:icon="@mipmap/ic_launcher"
-            android:targetActivity=".MainActivity">
+            android:targetActivity="com.github.lingyan000.fluxdo.MainActivity">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
@@ -143,7 +103,7 @@
             android:enabled="false"
             android:exported="true"
             android:icon="@mipmap/ic_launcher_modern"
-            android:targetActivity=".MainActivity">
+            android:targetActivity="com.github.lingyan000.fluxdo.MainActivity">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />

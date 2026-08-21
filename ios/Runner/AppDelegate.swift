@@ -13,7 +13,7 @@ import workmanager_apple
     GeneratedPluginRegistrant.register(with: self)
 
     // 注册 iOS 后台任务 handler（必须在 didFinishLaunchingWithOptions 返回前调用）
-    WorkmanagerPlugin.registerPeriodicTask(withIdentifier: "com.fluxdo.notificationPoll", frequency: nil)
+    WorkmanagerPlugin.registerPeriodicTask(withIdentifier: "com.ruawd.idcflare.notificationPoll", frequency: nil)
 
     // 注册 cookie 同步 channel，用于将 cookie 写入 HTTPCookieStorage.shared
     // WKWebView 的 sharedCookiesEnabled 在创建时从 HTTPCookieStorage.shared 读取 cookie

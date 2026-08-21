@@ -13,7 +13,7 @@ import '../../models/notification.dart';
 import '../active_site_service.dart';
 
 /// iOS 后台任务标识符
-const String kNotificationPollTask = 'com.fluxdo.notificationPoll';
+const String kNotificationPollTask = 'com.ruawd.idcflare.notificationPoll';
 
 /// SharedPreferences 键名
 const String _kUserId = 'bg_notification_user_id';

@@ -100,7 +100,7 @@ class BackgroundNotificationService {
 
     await FlutterForegroundTask.startService(
       serviceId: 200,
-      notificationTitle: 'FluxDO',
+      notificationTitle: 'IDC Flare',
       notificationText: S.current.notification_backgroundRunning,
       callback: startNotificationTaskHandler,
     );

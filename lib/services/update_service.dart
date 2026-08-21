@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -25,20 +26,20 @@ class ApkAsset {
   });
 
   Map<String, dynamic> toJson() => {
-        'downloadUrl': downloadUrl,
-        'sha256Url': sha256Url,
-        'architecture': architecture,
-        'size': size,
-        'name': name,
-      };
+    'downloadUrl': downloadUrl,
+    'sha256Url': sha256Url,
+    'architecture': architecture,
+    'size': size,
+    'name': name,
+  };
 
   factory ApkAsset.fromJson(Map<String, dynamic> json) => ApkAsset(
-        downloadUrl: json['downloadUrl'] as String,
-        sha256Url: json['sha256Url'] as String?,
-        architecture: json['architecture'] as String,
-        size: json['size'] as int,
-        name: json['name'] as String,
-      );
+    downloadUrl: json['downloadUrl'] as String,
+    sha256Url: json['sha256Url'] as String?,
+    architecture: json['architecture'] as String,
+    size: json['size'] as int,
+    name: json['name'] as String,
+  );
 }
 
 /// 更新信息模型
@@ -60,30 +61,31 @@ class UpdateInfo {
   });
 
   Map<String, dynamic> toJson() => {
-        'currentVersion': currentVersion,
-        'remoteVersion': remoteVersion,
-        'releaseUrl': releaseUrl,
-        'releaseNotes': releaseNotes,
-        'hasUpdate': hasUpdate,
-        'apkAssets': apkAssets.map((e) => e.toJson()).toList(),
-      };
+    'currentVersion': currentVersion,
+    'remoteVersion': remoteVersion,
+    'releaseUrl': releaseUrl,
+    'releaseNotes': releaseNotes,
+    'hasUpdate': hasUpdate,
+    'apkAssets': apkAssets.map((e) => e.toJson()).toList(),
+  };
 
   factory UpdateInfo.fromJson(Map<String, dynamic> json) => UpdateInfo(
-        currentVersion: json['currentVersion'] as String,
-        remoteVersion: json['remoteVersion'] as String,
-        releaseUrl: json['releaseUrl'] as String,
-        releaseNotes: json['releaseNotes'] as String,
-        hasUpdate: json['hasUpdate'] as bool,
-        apkAssets: (json['apkAssets'] as List<dynamic>?)
-                ?.map((e) => ApkAsset.fromJson(e as Map<String, dynamic>))
-                .toList() ??
-            [],
-      );
+    currentVersion: json['currentVersion'] as String,
+    remoteVersion: json['remoteVersion'] as String,
+    releaseUrl: json['releaseUrl'] as String,
+    releaseNotes: json['releaseNotes'] as String,
+    hasUpdate: json['hasUpdate'] as bool,
+    apkAssets:
+        (json['apkAssets'] as List<dynamic>?)
+            ?.map((e) => ApkAsset.fromJson(e as Map<String, dynamic>))
+            .toList() ??
+        [],
+  );
 }
 
 /// 应用更新检查服务
 class UpdateService {
-  static const String _repository = 'Lingyan000/fluxdo';
+  static const String _repository = 'Ruawd/fluxdo';
   static const String _apiUrl =
       'https://api.github.com/repos/$_repository/releases/latest';
   static const String _autoCheckUpdateKey = 'auto_check_update';
@@ -97,9 +99,35 @@ class UpdateService {
   final Dio _dio;
   final SharedPreferences? _prefs;
 
+  @visibleForTesting
+  static String normalizeReleaseVersion(String tagName) {
+    final match = RegExp(r'(\d+(?:\.\d+){0,2})').firstMatch(tagName);
+    if (match == null) {
+      throw FormatException('无法识别版本标签: $tagName');
+    }
+    return match.group(1)!;
+  }
+
+  @visibleForTesting
+  static int compareVersions(String first, String second) {
+    final parts1 = normalizeReleaseVersion(
+      first,
+    ).split('.').map(int.parse).toList();
+    final parts2 = normalizeReleaseVersion(
+      second,
+    ).split('.').map(int.parse).toList();
+
+    for (var i = 0; i < 3; i++) {
+      final p1 = i < parts1.length ? parts1[i] : 0;
+      final p2 = i < parts2.length ? parts2[i] : 0;
+      if (p1 != p2) return p1.compareTo(p2);
+    }
+    return 0;
+  }
+
   UpdateService({Dio? dio, SharedPreferences? prefs})
-      : _dio = dio ?? Dio(),
-        _prefs = prefs;
+    : _dio = dio ?? Dio(),
+      _prefs = prefs;
 
   /// 获取自动检查更新设置
   bool getAutoCheckUpdate() {
@@ -188,17 +216,20 @@ class UpdateService {
 
     // 获取存储的 ETag
     final storedEtag = _prefs?.getString(_etagKey);
+    final headers = <String, String>{
+      'User-Agent': 'IDC-Flare-App',
+      'Accept': 'application/vnd.github.v3+json',
+    };
+    if (storedEtag != null) {
+      headers['If-None-Match'] = storedEtag;
+    }
 
     try {
       final response = await _dio.get(
         _apiUrl,
         options: Options(
           responseType: ResponseType.json,
-          headers: {
-            'User-Agent': 'FluxDO-App',
-            'Accept': 'application/vnd.github.v3+json',
-            if (storedEtag != null) 'If-None-Match': storedEtag,
-          },
+          headers: headers,
           validateStatus: (status) =>
               status != null && (status == 200 || status == 304),
         ),
@@ -206,12 +237,16 @@ class UpdateService {
 
       // 304 Not Modified - 使用缓存
       if (response.statusCode == 304) {
-        final cachedInfo =
-            _getCachedUpdateInfo(currentVersion, ignoreExpiry: true);
+        final cachedInfo = _getCachedUpdateInfo(
+          currentVersion,
+          ignoreExpiry: true,
+        );
         if (cachedInfo != null) {
           // 更新缓存时间
           await _prefs?.setInt(
-              _cacheTimeKey, DateTime.now().millisecondsSinceEpoch);
+            _cacheTimeKey,
+            DateTime.now().millisecondsSinceEpoch,
+          );
           return cachedInfo;
         }
       }
@@ -232,8 +267,10 @@ class UpdateService {
     } on DioException catch (e) {
       // 403/429 速率限制时尝试使用缓存
       if (e.response?.statusCode == 403 || e.response?.statusCode == 429) {
-        final cachedInfo =
-            _getCachedUpdateInfo(currentVersion, ignoreExpiry: true);
+        final cachedInfo = _getCachedUpdateInfo(
+          currentVersion,
+          ignoreExpiry: true,
+        );
         if (cachedInfo != null) {
           return cachedInfo;
         }
@@ -244,8 +281,10 @@ class UpdateService {
   }
 
   /// 从缓存获取更新信息
-  UpdateInfo? _getCachedUpdateInfo(String currentVersion,
-      {bool ignoreExpiry = false}) {
+  UpdateInfo? _getCachedUpdateInfo(
+    String currentVersion, {
+    bool ignoreExpiry = false,
+  }) {
     if (_prefs == null) return null;
 
     final cacheJson = _prefs.getString(_cacheKey);
@@ -262,11 +301,13 @@ class UpdateService {
     }
 
     try {
-      final cached =
-          UpdateInfo.fromJson(jsonDecode(cacheJson) as Map<String, dynamic>);
+      final cached = UpdateInfo.fromJson(
+        jsonDecode(cacheJson) as Map<String, dynamic>,
+      );
 
       // 重新计算 hasUpdate（因为当前版本可能已变化）
-      final hasUpdate = _compareVersions(cached.remoteVersion, currentVersion) > 0;
+      final hasUpdate =
+          compareVersions(cached.remoteVersion, currentVersion) > 0;
 
       return UpdateInfo(
         currentVersion: currentVersion,
@@ -290,8 +331,11 @@ class UpdateService {
   }
 
   /// 解析更新信息
-  UpdateInfo _parseUpdateInfo(Map<String, dynamic> data, String currentVersion) {
-    final remoteVersion = (data['tag_name'] as String).replaceAll('v', '');
+  UpdateInfo _parseUpdateInfo(
+    Map<String, dynamic> data,
+    String currentVersion,
+  ) {
+    final remoteVersion = normalizeReleaseVersion(data['tag_name'] as String);
     final releaseUrl = data['html_url'] as String;
     var releaseNotes = data['body'] as String? ?? '';
 
@@ -303,7 +347,7 @@ class UpdateService {
       releaseNotes = releaseNotes.substring(0, markerIndex).trim();
     }
 
-    final hasUpdate = _compareVersions(remoteVersion, currentVersion) > 0;
+    final hasUpdate = compareVersions(remoteVersion, currentVersion) > 0;
 
     // 解析 APK 资源
     final assets = data['assets'] as List<dynamic>? ?? [];
@@ -343,13 +387,15 @@ class UpdateService {
       final architecture = _extractArchitecture(name);
       if (architecture == null) continue;
 
-      apkAssets.add(ApkAsset(
-        downloadUrl: asset['browser_download_url'] as String,
-        sha256Url: sha256Map[name],
-        architecture: architecture,
-        size: asset['size'] as int? ?? 0,
-        name: name,
-      ));
+      apkAssets.add(
+        ApkAsset(
+          downloadUrl: asset['browser_download_url'] as String,
+          sha256Url: sha256Map[name],
+          architecture: architecture,
+          size: asset['size'] as int? ?? 0,
+          name: name,
+        ),
+      );
     }
 
     return apkAssets;
@@ -386,15 +432,4 @@ class UpdateService {
   /// - 正数: v1 > v2
   /// - 0: v1 == v2
   /// - 负数: v1 < v2
-  int _compareVersions(String v1, String v2) {
-    final parts1 = v1.split('.').map(int.parse).toList();
-    final parts2 = v2.split('.').map(int.parse).toList();
-
-    for (int i = 0; i < 3; i++) {
-      final p1 = i < parts1.length ? parts1[i] : 0;
-      final p2 = i < parts2.length ? parts2[i] : 0;
-      if (p1 != p2) return p1.compareTo(p2);
-    }
-    return 0;
-  }
 }

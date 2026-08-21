@@ -22,14 +22,14 @@ void main() {
   test('canHandleUri 只接受受支持的 scheme 和 host', () {
     final service = DeepLinkService.instance;
 
-    expect(service.canHandleUri(Uri.parse('https://linux.do/t/123')), isTrue);
+    expect(service.canHandleUri(Uri.parse('https://linux.do/t/123')), isFalse);
     expect(
       service.canHandleUri(Uri.parse('https://www.linux.do/t/123')),
-      isTrue,
+      isFalse,
     );
     expect(
       service.canHandleUri(Uri.parse('https://meta.linux.do/latest')),
-      isTrue,
+      isFalse,
     );
     expect(
       service.canHandleUri(Uri.parse('https://idcflare.com/t/456')),
@@ -39,10 +39,11 @@ void main() {
       service.canHandleUri(Uri.parse('https://www.idcflare.com/u/alice')),
       isTrue,
     );
-    expect(service.canHandleUri(Uri.parse('fluxdo://topic/123')), isTrue);
+    expect(service.canHandleUri(Uri.parse('idcflare://topic/123')), isTrue);
+    expect(service.canHandleUri(Uri.parse('fluxdo://topic/123')), isFalse);
     expect(
       service.canHandleUri(Uri.parse('discourse://auth_redirect?payload=x')),
-      isTrue,
+      isFalse,
     );
     expect(
       service.canHandleUri(Uri.parse('https://example.com/t/123')),
@@ -51,7 +52,7 @@ void main() {
     expect(service.canHandleUri(Uri.parse('ftp://linux.do/t/123')), isFalse);
   });
 
-  testWidgets('handleUri 不接管非 linux.do 的话题路径', (tester) async {
+  testWidgets('handleUri 不接管非 IDC Flare 的话题路径', (tester) async {
     BuildContext? capturedContext;
 
     await tester.pumpWidget(
@@ -73,7 +74,7 @@ void main() {
     expect(Navigator.of(context).canPop(), isFalse);
   });
 
-  testWidgets('handleUri 支持 fluxdo 话题链接', (tester) async {
+  testWidgets('handleUri 支持 IDC Flare 话题链接', (tester) async {
     BuildContext? capturedContext;
     final observer = _RecordingNavigatorObserver();
 
@@ -92,7 +93,7 @@ void main() {
     final context = capturedContext!;
     observer.pushedRoutes.clear();
     DeepLinkService.instance.updateContext(context);
-    DeepLinkService.instance.handleUri(Uri.parse('fluxdo://topic/123/5'));
+    DeepLinkService.instance.handleUri(Uri.parse('idcflare://topic/123/5'));
 
     expect(observer.pushedRoutes, hasLength(1));
     expect(Navigator.of(context).canPop(), isTrue);
@@ -101,7 +102,7 @@ void main() {
     await tester.pumpAndSettle();
   });
 
-  testWidgets('handleUri 支持 fluxdo 用户链接', (tester) async {
+  testWidgets('handleUri 支持 IDC Flare 用户链接', (tester) async {
     BuildContext? capturedContext;
     final observer = _RecordingNavigatorObserver();
 
@@ -120,7 +121,7 @@ void main() {
     final context = capturedContext!;
     observer.pushedRoutes.clear();
     DeepLinkService.instance.updateContext(context);
-    DeepLinkService.instance.handleUri(Uri.parse('fluxdo://user/alice'));
+    DeepLinkService.instance.handleUri(Uri.parse('idcflare://user/alice'));
 
     expect(observer.pushedRoutes, hasLength(1));
     expect(Navigator.of(context).canPop(), isTrue);
@@ -129,7 +130,7 @@ void main() {
     await tester.pumpAndSettle();
   });
 
-  testWidgets('handleUri 对 fluxdo scheme 大小写不敏感', (tester) async {
+  testWidgets('handleUri 对 IDC Flare scheme 路径大小写不敏感', (tester) async {
     BuildContext? capturedContext;
     final observer = _RecordingNavigatorObserver();
 
@@ -148,7 +149,7 @@ void main() {
     final context = capturedContext!;
     observer.pushedRoutes.clear();
     DeepLinkService.instance.updateContext(context);
-    DeepLinkService.instance.handleUri(Uri.parse('fluxdo://Topic/123'));
+    DeepLinkService.instance.handleUri(Uri.parse('idcflare://Topic/123'));
 
     expect(observer.pushedRoutes, hasLength(1));
     expect(Navigator.of(context).canPop(), isTrue);

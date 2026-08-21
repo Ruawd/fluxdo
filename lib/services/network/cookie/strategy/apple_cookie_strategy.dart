@@ -2,7 +2,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 
-import '../../../../config/discourse_site.dart';
+import '../../../../constants.dart';
 import 'default_cookie_strategy.dart';
 
 /// Apple (iOS / macOS) cookie 策略
@@ -24,9 +24,10 @@ class AppleCookieStrategy extends DefaultCookieStrategy {
 
     // 同时清除 HTTPCookieStorage.shared
     try {
-      for (final site in DiscourseSiteRegistry.all) {
-        await _nativeCookieChannel.invokeMethod('clearCookies', site.baseUrl);
-      }
+      await _nativeCookieChannel.invokeMethod(
+        'clearCookies',
+        AppConstants.baseUrl,
+      );
     } catch (e) {
       debugPrint('[CookieStrategy][Apple] HTTPCookieStorage clear failed: $e');
     }
