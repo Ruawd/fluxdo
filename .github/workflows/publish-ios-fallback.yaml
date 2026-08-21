@@ -1,0 +1,63 @@
+name: Publish iOS IPA fallback
+
+on:
+  workflow_run:
+    workflows:
+      - Build and Release
+    types:
+      - completed
+
+# 完整发布包含多个平台；如果非 iOS 平台失败，但 iOS 产物已经成功上传，
+# 仍应把 IPA 发布出来，避免 Android/Flatpak 等任务阻断用户下载。
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  publish_ios:
+    if: >-
+      github.event.workflow_run.conclusion == 'failure' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_repository.full_name == github.repository &&
+      startsWith(github.event.workflow_run.head_branch, 'v')
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download successful iOS artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: artifact-ios
+          path: downloaded
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: ${{ github.event.workflow_run.id }}
+
+      - name: Prepare release files
+        shell: bash
+        run: |
+          set -euo pipefail
+          ipa_path="$(find downloaded -type f -name 'fluxdo-unsigned.ipa' -print -quit)"
+          test -n "$ipa_path"
+          mkdir -p release
+          cp "$ipa_path" release/fluxdo-unsigned.ipa
+          (
+            cd release
+            sha256sum fluxdo-unsigned.ipa > fluxdo-unsigned.ipa.sha256
+          )
+
+      - name: Publish IPA release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.workflow_run.head_branch }}
+          name: Fluxdo ${{ github.event.workflow_run.head_branch }}
+          body: |
+            iOS unsigned IPA build.
+
+            This fallback release was published because another platform in the
+            full release workflow failed after the iOS build had succeeded.
+          files: release/*
+          draft: false
+          prerelease: false
+          fail_on_unmatched_files: true
+          overwrite_files: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
