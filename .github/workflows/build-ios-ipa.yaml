@@ -1,0 +1,94 @@
+name: Build iOS IPA
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'ios-v*'
+
+concurrency:
+  group: ios-ipa-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build_ios:
+    runs-on: macos-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.44.0'
+          cache: true
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: core/doh_proxy
+          key: ios
+
+      - name: Setup iOS Rust targets
+        run: rustup target add aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios
+
+      - name: Configure Git for CocoaPods
+        run: git config --global url."https://x-access-token:${{ github.token }}@github.com/".insteadOf "https://github.com/"
+
+      - name: Build unsigned IPA
+        run: |
+          set -euo pipefail
+          dart tool/flutterw.dart build ios --release --no-codesign
+          nm -gU build/ios/iphoneos/Runner.app/Runner | grep "_doh_proxy_start_with_config_json"
+          mkdir -p dist build/ios/iphoneos/Payload
+          cp -R build/ios/iphoneos/Runner.app build/ios/iphoneos/Payload/
+          (
+            cd build/ios/iphoneos
+            zip -r fluxdo-unsigned.ipa Payload
+          )
+          mv build/ios/iphoneos/fluxdo-unsigned.ipa dist/
+          (
+            cd dist
+            shasum -a 256 fluxdo-unsigned.ipa > fluxdo-unsigned.ipa.sha256
+          )
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: artifact-ios
+          path: dist/
+          if-no-files-found: error
+          overwrite: true
+
+      - name: Read release version
+        if: startsWith(github.ref, 'refs/tags/')
+        id: version
+        shell: bash
+        run: |
+          version="${GITHUB_REF_NAME#ios-v}"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Publish iOS release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          name: Fluxdo v${{ steps.version.outputs.version }} iOS
+          body: |
+            Fluxdo ${{ steps.version.outputs.version }} unsigned iOS IPA.
+
+            Use AltStore, SideStore or another signing tool to self-sign before installation.
+          files: dist/*
+          draft: false
+          prerelease: false
+          fail_on_unmatched_files: true
+          overwrite_files: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
