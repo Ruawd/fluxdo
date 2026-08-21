@@ -22,6 +22,7 @@ import 'notion_settings_page.dart';
 import 'preferences_page.dart';
 import 'reading_settings_page.dart';
 import 'shortcut_settings_page.dart';
+import 'site_switch_page.dart';
 
 class SettingsPage extends ConsumerStatefulWidget {
   static const double parallelMasterWidth = PaneBreakpoints.settingsMasterWidth;
@@ -343,6 +344,12 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
       children: [
         SegmentedCardGroup(
           children: [
+            _buildOptionTile(
+              icon: Symbols.hub_rounded,
+              iconColor: Colors.blue,
+              title: l10n.settings_community,
+              onTap: () => _openSettingsPage((_) => const SiteSwitchPage()),
+            ),
             _buildOptionTile(
               icon: Symbols.color_lens_rounded,
               iconColor: Colors.teal,

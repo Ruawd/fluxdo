@@ -1,6 +1,8 @@
 import 'package:flutter/foundation.dart';
 
+import '../config/discourse_site.dart';
 import 'discourse/discourse_service.dart';
+import 'active_site_service.dart';
 
 /// 一条 emoji 候选:名字 + 命中的别名(用于在候选行里提示"为什么匹配上")。
 class EmojiAliasHit {
@@ -22,10 +24,17 @@ class EmojiAliasHit {
 /// (敲下 `:`)调 [ensureLoaded],会话结束(选中/取消)调 [invalidate];
 /// 下一次敲 `:` 会重新拉一遍,拿到的是当时的最新别名表。
 class EmojiAliasService {
-  static final EmojiAliasService _instance = EmojiAliasService._internal();
-  factory EmojiAliasService() => _instance;
-  EmojiAliasService._internal();
+  EmojiAliasService._internal(this._site);
+  static final Map<String, EmojiAliasService> _instances = {};
+  factory EmojiAliasService() {
+    final site = ActiveSiteService.instance.current;
+    return _instances.putIfAbsent(
+      site.id,
+      () => EmojiAliasService._internal(site),
+    );
+  }
 
+  final DiscourseSite _site;
   Map<String, List<String>>? _aliases;
   Future<void>? _inflight;
 
@@ -56,9 +65,9 @@ class EmojiAliasService {
 
   Future<void> _fetch() async {
     try {
-      final res = await DiscourseService().dio.get<dynamic>(
-        '/emojis/search-aliases.json',
-      );
+      final res = await DiscourseService.forSite(
+        _site,
+      ).dio.get<dynamic>('/emojis/search-aliases.json');
       final data = res.data;
       if (data is! Map) return;
       final parsed = <String, List<String>>{};

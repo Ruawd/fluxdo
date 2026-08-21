@@ -3,6 +3,7 @@ import 'package:app_icons/app_icons.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../l10n/s.dart';
+import '../constants.dart';
 import '../models/user.dart';
 import '../pages/bookmarks_page.dart';
 import '../pages/browsing_history_page.dart';
@@ -69,8 +70,7 @@ class NavEntryRegistry {
         iconData: Symbols.history_rounded,
         selectedIconData: Symbols.history_rounded,
         label: (ctx) => ctx.l10n.nav_history,
-        pageBuilder: (ctx, isActive) =>
-            BrowsingHistoryPage(isActive: isActive),
+        pageBuilder: (ctx, isActive) => BrowsingHistoryPage(isActive: isActive),
         requiresLogin: true,
       ),
       NavEntry(
@@ -88,32 +88,34 @@ class NavEntryRegistry {
         iconData: Symbols.mail_rounded,
         selectedIconData: Symbols.mail_rounded,
         label: (ctx) => ctx.l10n.nav_messages,
-        pageBuilder: (ctx, isActive) =>
-            PrivateMessagesPage(isActive: isActive),
+        pageBuilder: (ctx, isActive) => PrivateMessagesPage(isActive: isActive),
         requiresLogin: true,
       ),
-      NavEntry(
-        id: NavEntryIds.chat,
-        kind: NavEntryKind.page,
-        iconData: Symbols.forum_rounded,
-        selectedIconData: Symbols.forum_rounded,
-        label: (ctx) => ctx.l10n.chat_title,
-        pageBuilder: (ctx, isActive) => ChatListPage(isActive: isActive),
-        requiresLogin: true,
-        // 未读徽章:watch 即激活 chatChannelsProvider(全局非 autoDispose),
-        // 使 new-channel/user-tracking-state 订阅随底栏常驻
-        customIconBuilder: (ctx, ref) => _chatIcon(ref, selected: false),
-        customSelectedIconBuilder: (ctx, ref) => _chatIcon(ref, selected: true),
-      ),
-      NavEntry(
-        id: NavEntryIds.seeking,
-        kind: NavEntryKind.page,
-        iconData: Symbols.visibility_rounded,
-        selectedIconData: Symbols.visibility_rounded,
-        label: (ctx) => ctx.l10n.seeking_title,
-        pageBuilder: (ctx, isActive) => SeekingPage(isActive: isActive),
-        requiresLogin: true,
-      ),
+      if (AppConstants.site.supportsChat)
+        NavEntry(
+          id: NavEntryIds.chat,
+          kind: NavEntryKind.page,
+          iconData: Symbols.forum_rounded,
+          selectedIconData: Symbols.forum_rounded,
+          label: (ctx) => ctx.l10n.chat_title,
+          pageBuilder: (ctx, isActive) => ChatListPage(isActive: isActive),
+          requiresLogin: true,
+          // 未读徽章:watch 即激活 chatChannelsProvider(全局非 autoDispose),
+          // 使 new-channel/user-tracking-state 订阅随底栏常驻
+          customIconBuilder: (ctx, ref) => _chatIcon(ref, selected: false),
+          customSelectedIconBuilder: (ctx, ref) =>
+              _chatIcon(ref, selected: true),
+        ),
+      if (AppConstants.site.supportsSeeking)
+        NavEntry(
+          id: NavEntryIds.seeking,
+          kind: NavEntryKind.page,
+          iconData: Symbols.visibility_rounded,
+          selectedIconData: Symbols.visibility_rounded,
+          label: (ctx) => ctx.l10n.seeking_title,
+          pageBuilder: (ctx, isActive) => SeekingPage(isActive: isActive),
+          requiresLogin: true,
+        ),
       NavEntry(
         id: NavEntryIds.notifications,
         kind: NavEntryKind.panel,
@@ -158,10 +160,7 @@ Widget _chatIcon(WidgetRef ref, {required bool selected}) {
   final unread = ref.watch(chatTotalUnreadProvider);
   final icon = Icon(Symbols.forum_rounded, fill: selected ? 1 : 0);
   if (unread <= 0) return icon;
-  return Badge(
-    label: Text(unread > 99 ? '99+' : '$unread'),
-    child: icon,
-  );
+  return Badge(label: Text(unread > 99 ? '99+' : '$unread'), child: icon);
 }
 
 Widget _profileIcon(

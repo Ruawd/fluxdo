@@ -2,6 +2,7 @@ import 'package:dio/dio.dart';
 import 'package:dio_smart_retry/dio_smart_retry.dart';
 import 'package:flutter/foundation.dart';
 
+import '../../config/discourse_site.dart';
 import '../../constants.dart';
 import 'adapters/platform_adapter.dart';
 import 'cookie/app_cookie_manager.dart';
@@ -24,6 +25,7 @@ class DiscourseDio {
     Duration receiveTimeout = const Duration(seconds: 30),
     Map<String, dynamic>? defaultHeaders,
     String? baseUrl,
+
     /// null 表示不限制（用于下载、MessageBus 等），非 null 启用调度器。
     /// 实际并发数和速率从 [RequestSchedulerConfig] 动态读取。
     int? maxConcurrent = 3,
@@ -31,13 +33,18 @@ class DiscourseDio {
     bool enableCfChallenge = true,
     bool enableCookies = true,
     bool enableNetworkLog = true,
+
     /// true 时强制使用稳定的 NativeAdapter,绕过 _DynamicAdapter 的 rhttp 切换。
     /// 用于 MessageBus 长轮询等需要长期保持连接、依赖系统级省电的场景。
     bool useStableAdapter = false,
   }) {
+    final effectiveBaseUrl = baseUrl ?? AppConstants.baseUrl;
+    final baseUri = Uri.parse(effectiveBaseUrl);
+    final site =
+        DiscourseSiteRegistry.byHost(baseUri.host) ?? AppConstants.site;
     final dio = Dio(
       BaseOptions(
-        baseUrl: baseUrl ?? AppConstants.baseUrl,
+        baseUrl: effectiveBaseUrl,
         connectTimeout: connectTimeout,
         receiveTimeout: receiveTimeout,
         headers: defaultHeaders,
@@ -107,7 +114,9 @@ class DiscourseDio {
     }
 
     // 7. 请求头拦截器
-    dio.interceptors.add(RequestHeaderInterceptor(CsrfTokenService()));
+    dio.interceptors.add(
+      RequestHeaderInterceptor(CsrfTokenService.forSite(site), site.baseUrl),
+    );
 
     // 8. 重定向拦截器
     dio.interceptors.add(RedirectInterceptor(dio));
@@ -118,7 +127,11 @@ class DiscourseDio {
     // 10. CF 验证拦截器
     if (enableCfChallenge) {
       dio.interceptors.add(
-        CfChallengeInterceptor(dio: dio, cookieJarService: cookieJarService),
+        CfChallengeInterceptor(
+          dio: dio,
+          cookieJarService: cookieJarService,
+          site: site,
+        ),
       );
     }
 

@@ -5,7 +5,7 @@ import 'dart:io' as io;
 import 'package:flutter/foundation.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 
-import '../constants.dart';
+import '../config/discourse_site.dart';
 import '../utils/frame_jank_monitor.dart';
 import '../utils/scroll_busy_signal.dart';
 import 'cf_challenge_logger.dart';
@@ -14,6 +14,7 @@ import 'network/cookie/cookie_jar_service.dart';
 import 'network/cookie/webview_cookie_priming.dart';
 import 'webview_settings.dart';
 import 'windows_webview_environment_service.dart';
+import 'active_site_service.dart';
 
 /// cf_clearance 自动续期服务。
 ///
@@ -22,10 +23,24 @@ import 'windows_webview_environment_service.dart';
 /// Dart 侧不代理、不重放 CF 请求，只在边界时机把 WebView 中新的
 /// `.linux.do` cf_clearance 同步回 CookieJar。
 class CfClearanceRefreshService {
-  static final CfClearanceRefreshService _instance =
-      CfClearanceRefreshService._internal();
-  factory CfClearanceRefreshService() => _instance;
-  CfClearanceRefreshService._internal();
+  static final Map<String, CfClearanceRefreshService> _instances = {};
+  factory CfClearanceRefreshService() {
+    return forSite(ActiveSiteService.instance.current);
+  }
+
+  static CfClearanceRefreshService forSite(DiscourseSite site) {
+    return _instances.putIfAbsent(
+      site.id,
+      () => CfClearanceRefreshService._internal(site),
+    );
+  }
+
+  CfClearanceRefreshService._internal(DiscourseSite site)
+    : _siteBaseUrl = site.baseUrl,
+      _siteUri = site.uri;
+
+  final String _siteBaseUrl;
+  final Uri _siteUri;
 
   static const String _cookieName = 'cf_clearance';
   static const int _maxConsecutiveFailures = 3;
@@ -266,7 +281,7 @@ class CfClearanceRefreshService {
 
     try {
       WebViewCookiePriming.instance.invalidate();
-      await WebViewCookiePriming.instance.prime(AppConstants.baseUrl);
+      await WebViewCookiePriming.instance.prime(_siteBaseUrl);
     } catch (e) {
       debugPrint('[CfRefresh] WebView cookie priming 失败，继续启动: $e');
       CfChallengeLogger.log('[CfRefresh] WebView cookie priming 失败，继续启动: $e');
@@ -343,7 +358,7 @@ class CfClearanceRefreshService {
       } else {
         await controller.loadData(
           data: html,
-          baseUrl: WebUri(AppConstants.baseUrl),
+          baseUrl: WebUri(_siteBaseUrl),
           mimeType: 'text/html',
           encoding: 'utf-8',
         );
@@ -485,7 +500,7 @@ document.close();
       } else {
         await controller.loadData(
           data: html,
-          baseUrl: WebUri(AppConstants.baseUrl),
+          baseUrl: WebUri(_siteBaseUrl),
           mimeType: 'text/html',
           encoding: 'utf-8',
         );
@@ -629,16 +644,15 @@ document.close();
     // 后自然补上。初始 Turnstile 运行期(_initialTimer 未清)只恢复不
     // 挂起,避免把首次验证拖到超时误判重建。
     if (io.Platform.isAndroid) {
-      _scrollPauseTicker = Timer.periodic(
-        const Duration(milliseconds: 500),
-        (_) {
-          if (!_canHandleGeneration(gen)) {
-            _scrollPauseTicker?.cancel();
-            return;
-          }
-          unawaited(_updateScrollPause());
-        },
-      );
+      _scrollPauseTicker = Timer.periodic(const Duration(milliseconds: 500), (
+        _,
+      ) {
+        if (!_canHandleGeneration(gen)) {
+          _scrollPauseTicker?.cancel();
+          return;
+        }
+        unawaited(_updateScrollPause());
+      });
     }
   }
 
@@ -672,7 +686,7 @@ document.close();
     _isSyncingCookies = true;
     try {
       await BoundarySyncService.instance.syncFromWebView(
-        currentUrl: AppConstants.baseUrl,
+        currentUrl: _siteBaseUrl,
         controller: controller,
         cookieNames: const {_cookieName},
         trusted: true,
@@ -716,7 +730,10 @@ document.close();
   }
 
   Future<_ClearanceSnapshot?> _readClearanceSnapshot() async {
-    final cookie = await CookieJarService().getCanonicalCookie(_cookieName);
+    final cookie = await CookieJarService().getCanonicalCookie(
+      _cookieName,
+      uri: _siteUri,
+    );
     if (cookie == null || cookie.value.isEmpty) return null;
     if (!CookieJarService.matchesAppHost(cookie.domain)) return null;
     final expiresAt = cookie.expiresAt?.toLocal();
@@ -872,7 +889,7 @@ document.close();
     return int.tryParse(value?.toString() ?? '') ?? 0;
   }
 
-  String get _windowsBootstrapUrl => '${AppConstants.baseUrl}/robots.txt';
+  String get _windowsBootstrapUrl => '${_siteBaseUrl}/robots.txt';
 
   // ---------------------------------------------------------------------------
   // HTML 模板

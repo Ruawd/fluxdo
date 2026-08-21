@@ -1,13 +1,23 @@
+import '../config/discourse_site.dart';
+import 'active_site_service.dart';
 import 'storage/resilient_secure_storage.dart';
 
 /// 登录凭证安全存储服务（单例）
 class CredentialStoreService {
-  CredentialStoreService._();
-  static final CredentialStoreService _instance = CredentialStoreService._();
-  factory CredentialStoreService() => _instance;
+  CredentialStoreService._(DiscourseSite site)
+    : _keyUsername = site.scopedStorageKey('login_credential_username'),
+      _keyPassword = site.scopedStorageKey('login_credential_password');
+  static final Map<String, CredentialStoreService> _instances = {};
+  factory CredentialStoreService() {
+    final site = ActiveSiteService.instance.current;
+    return _instances.putIfAbsent(
+      site.id,
+      () => CredentialStoreService._(site),
+    );
+  }
 
-  static const _keyUsername = 'login_credential_username';
-  static const _keyPassword = 'login_credential_password';
+  final String _keyUsername;
+  final String _keyPassword;
 
   final _storage = ResilientSecureStorage();
 

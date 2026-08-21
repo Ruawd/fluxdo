@@ -146,7 +146,7 @@ extension _PostFooterMenuActions on _PostFooterSectionState {
                     widget.onShareAsImage!();
                   },
                 ),
-              if (!isGuest)
+              if (!isGuest && AppConstants.site.supportsLdcRewards)
                 Builder(
                   builder: (context) {
                     final currentUser = ref.read(currentUserProvider).value;

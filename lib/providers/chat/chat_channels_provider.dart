@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../models/chat/chat_channel.dart';
 import '../../models/chat/chat_message.dart';
 import '../../services/message_bus_service.dart';
+import '../../services/active_site_service.dart';
 import '../../storage/chat_cache_dao.dart';
 import '../discourse_providers.dart';
 import '../message_bus/message_bus_service_provider.dart';
@@ -82,11 +83,12 @@ class ChatChannelsNotifier extends AsyncNotifier<ChatChannelsState> {
     ref.onDispose(_teardown);
 
     if (user == null) return const ChatChannelsState();
+    final accountId = ActiveSiteService.instance.scopedAccountId(user.username);
 
     // 冷启:先出缓存快照(损坏/无缓存静默跳过),网络返回后整体覆盖
     if (state.value == null || state.value!.directMessageChannels.isEmpty) {
       try {
-        final snapshot = await _cacheDao.readSnapshot(user.username);
+        final snapshot = await _cacheDao.readSnapshot(accountId);
         if (snapshot != null && state.value == null) {
           state = AsyncData(
             ChatChannelsState(
@@ -133,12 +135,11 @@ class ChatChannelsNotifier extends AsyncNotifier<ChatChannelsState> {
     unawaited(
       _cacheDao
           .writeSnapshot(
-            user.username,
-            channels: (rawResponse['direct_message_channels']
-                        as List<dynamic>? ??
-                    [])
-                .whereType<Map<String, dynamic>>()
-                .toList(),
+            accountId,
+            channels:
+                (rawResponse['direct_message_channels'] as List<dynamic>? ?? [])
+                    .whereType<Map<String, dynamic>>()
+                    .toList(),
             publicChannels:
                 (rawResponse['public_channels'] as List<dynamic>? ?? [])
                     .whereType<Map<String, dynamic>>()
@@ -284,8 +285,7 @@ class ChatChannelsNotifier extends AsyncNotifier<ChatChannelsState> {
     if (current == null) return;
 
     final currentUserId = ref.read(currentUserProvider).value?.id;
-    final isSelf =
-        currentUserId != null && message.user?.id == currentUserId;
+    final isSelf = currentUserId != null && message.user?.id == currentUserId;
     var tracking = current.tracking;
     if (!isSelf) {
       final old = tracking[channelId] ?? const ChatChannelTracking();
@@ -329,7 +329,10 @@ class ChatChannelsNotifier extends AsyncNotifier<ChatChannelsState> {
     if (_onTrackingState != null) {
       final user = ref.read(currentUserProvider).value;
       if (user != null) {
-        bus.unsubscribe('/chat/user-tracking-state/${user.id}', _onTrackingState);
+        bus.unsubscribe(
+          '/chat/user-tracking-state/${user.id}',
+          _onTrackingState,
+        );
       }
     }
     if (_onChannelEdits != null) {
@@ -381,13 +384,14 @@ class ChatChannelsNotifier extends AsyncNotifier<ChatChannelsState> {
     } else {
       list.add(channel);
     }
-    state = AsyncData(
-      current.copyWith(directMessageChannels: _sorted(list)),
-    );
+    state = AsyncData(current.copyWith(directMessageChannels: _sorted(list)));
   }
 
   /// 频道来了新消息:更新最后一条并按时间重排(消息层调用;双列表通吃)
-  void bumpChannel(int channelId, {required ChatChannel Function(ChatChannel) update}) {
+  void bumpChannel(
+    int channelId, {
+    required ChatChannel Function(ChatChannel) update,
+  }) {
     final current = state.value;
     if (current == null) return;
     final dms = [...current.directMessageChannels];

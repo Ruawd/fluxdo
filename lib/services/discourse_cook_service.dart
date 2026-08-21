@@ -4,8 +4,10 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart' show rootBundle;
 
+import '../config/discourse_site.dart';
 import 'preloaded_data_service.dart';
 import 'discourse/discourse_service.dart';
+import 'active_site_service.dart';
 import 'cook/cook_js_engine_stub.dart'
     if (dart.library.io) 'cook/cook_js_engine_io.dart';
 
@@ -19,10 +21,17 @@ import 'cook/cook_js_engine_stub.dart'
 /// 失败面（web 平台 / bundle eval 失败 / 站点数据未加载 / JS 抛错）统一
 /// 返回 null，由调用方降级到旧的 Dart 近似预览管线。
 class DiscourseCookService {
-  static final DiscourseCookService _instance =
-      DiscourseCookService._internal();
-  factory DiscourseCookService() => _instance;
-  DiscourseCookService._internal();
+  DiscourseCookService._internal(this._site);
+  static final Map<String, DiscourseCookService> _instances = {};
+  factory DiscourseCookService() {
+    final site = ActiveSiteService.instance.current;
+    return _instances.putIfAbsent(
+      site.id,
+      () => DiscourseCookService._internal(site),
+    );
+  }
+
+  final DiscourseSite _site;
 
   CookJsEngine? _engine;
   Future<bool>? _initFuture;
@@ -37,6 +46,9 @@ class DiscourseCookService {
   /// 幂等初始化。失败后置为不可用（本次进程内不再重试 eval 大 bundle，
   /// 站点数据缺失导致的失败除外——那种情况保留重试机会）。
   Future<bool> ensureInitialized() {
+    if (ActiveSiteService.instance.current.id != _site.id) {
+      return Future.value(false);
+    }
     if (_unavailable) return Future.value(false);
     return _initFuture ??= _initialize().then((ok) {
       if (!ok) _initFuture = null; // 允许下次重试（如站点数据晚到）
@@ -51,7 +63,7 @@ class DiscourseCookService {
     }
 
     // 1. 站点数据（cook 需要 siteSettings/site/customEmoji/baseUri）
-    final preloaded = PreloadedDataService();
+    final preloaded = PreloadedDataService.forSite(_site);
     Map<String, dynamic>? siteSettings;
     Map<String, dynamic>? site;
     try {
@@ -125,7 +137,11 @@ class DiscourseCookService {
     final topTags = site['top_tags'] as List?;
     if (topTags == null) return const [];
     return topTags
-        .map((t) => t is Map<String, dynamic> ? (t['name'] as String? ?? '') : t.toString())
+        .map(
+          (t) => t is Map<String, dynamic>
+              ? (t['name'] as String? ?? '')
+              : t.toString(),
+        )
         .where((name) => name.isNotEmpty)
         .toList();
   }
@@ -133,6 +149,7 @@ class DiscourseCookService {
   /// cook raw markdown → cooked HTML。任何失败返回 null（调用方降级）。
   Future<String?> cook(String raw) async {
     if (raw.trim().isEmpty) return '';
+    if (ActiveSiteService.instance.current.id != _site.id) return null;
     if (!await ensureInitialized()) return null;
     final engine = _engine;
     if (engine == null) return null;
@@ -146,7 +163,10 @@ class DiscourseCookService {
       debugPrint('[DiscourseCook] cook 失败: $cookError');
       return null;
     }
-    return postProcessCooked(cooked, baseUri: PreloadedDataService().baseUri);
+    return postProcessCooked(
+      cooked,
+      baseUri: PreloadedDataService.forSite(_site).baseUri,
+    );
   }
 
   /// 客户端 cook 输出的 Dart 后处理（纯函数，可单测）。
@@ -183,12 +203,13 @@ class DiscourseCookService {
   /// 无占位/全部请求过/全部失败返回 false。块级 onebox 串行请求
   /// （服务端限制每用户同时只允许 1 个预览）；行内每批 ≤10。
   Future<bool> resolveOneboxes(String cooked) async {
+    if (ActiveSiteService.instance.current.id != _site.id) return false;
     final engine = _engine;
     if (engine == null) return false;
 
     final targets = extractOneboxTargets(cooked);
     var seeded = false;
-    final service = DiscourseService();
+    final service = DiscourseService.forSite(_site);
 
     // 块级：串行
     for (final url in targets.blockUrls) {

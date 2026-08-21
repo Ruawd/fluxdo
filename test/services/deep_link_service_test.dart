@@ -31,6 +31,14 @@ void main() {
       service.canHandleUri(Uri.parse('https://meta.linux.do/latest')),
       isTrue,
     );
+    expect(
+      service.canHandleUri(Uri.parse('https://idcflare.com/t/456')),
+      isTrue,
+    );
+    expect(
+      service.canHandleUri(Uri.parse('https://www.idcflare.com/u/alice')),
+      isTrue,
+    );
     expect(service.canHandleUri(Uri.parse('fluxdo://topic/123')), isTrue);
     expect(
       service.canHandleUri(Uri.parse('discourse://auth_redirect?payload=x')),

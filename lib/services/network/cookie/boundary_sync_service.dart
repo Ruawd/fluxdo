@@ -228,7 +228,7 @@ class BoundarySyncService {
         } else {
           // 旧 Android（GET_COOKIE_INFO 不支持）：domain 为 null
           // 优先继承 jar 中已有的 domain
-          final existing = await _jar.getCanonicalCookie(wc.name);
+          final existing = await _jar.getCanonicalCookie(wc.name, uri: uri);
           if (existing != null &&
               existing.domain != null &&
               existing.domain!.trim().isNotEmpty) {
@@ -272,7 +272,7 @@ class BoundarySyncService {
               value: value,
               domain: domain,
               path: cookie.path ?? '/',
-              requestHost: host,
+              requestUri: uri,
             )) {
           continue;
         }
@@ -309,6 +309,7 @@ class BoundarySyncService {
         await _jar.enforceAuthCookiePolicy(
           reason: 'boundary_sync',
           names: authNames,
+          siteUri: uri,
         );
       }
       final syncedDetails = await _jar.getCookieDiagnosticsForRequest(
@@ -465,9 +466,9 @@ class BoundarySyncService {
     required String value,
     required String? domain,
     required String path,
-    required String requestHost,
+    required Uri requestUri,
   }) async {
-    final existing = await _jar.getCanonicalCookie(name);
+    final existing = await _jar.getCanonicalCookie(name, uri: requestUri);
     if (existing == null || existing.value != value) return false;
     if (existing.path != path) return false;
 
@@ -475,7 +476,7 @@ class BoundarySyncService {
     if (existing.hostOnly != nextHostOnly) return false;
 
     final nextDomain = nextHostOnly
-        ? requestHost.toLowerCase()
+        ? requestUri.host.toLowerCase()
         : CookieJarService.normalizeWebViewCookieDomain(domain);
     return existing.normalizedDomain == nextDomain;
   }
@@ -652,7 +653,9 @@ class BoundarySyncService {
     List<Cookie> cookies,
   ) {
     final valueHashes =
-        cookies.map((cookie) => (cookie.value?.toString() ?? '').hashCode).toList()
+        cookies
+            .map((cookie) => (cookie.value?.toString() ?? '').hashCode)
+            .toList()
           ..sort();
     return '$host|$name|${valueHashes.join(',')}';
   }

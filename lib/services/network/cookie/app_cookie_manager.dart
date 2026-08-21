@@ -5,6 +5,7 @@ import 'package:dio/dio.dart';
 import 'package:enhanced_cookie_jar/enhanced_cookie_jar.dart';
 import 'package:flutter/foundation.dart';
 
+import '../../../config/discourse_site.dart';
 import '../../auth_session.dart';
 import '../../log/log_writer.dart';
 import 'cookie_jar_service.dart';
@@ -70,6 +71,7 @@ class AppCookieManager extends Interceptor {
   Future<void> _deleteAuthCookieVariantsIfManaged({
     required Iterable<String> names,
     required String reason,
+    required Uri siteUri,
   }) async {
     final authNames = names
         .where(CookieJarService.hostOnlyCookieNames.contains)
@@ -84,13 +86,14 @@ class AppCookieManager extends Interceptor {
       debugPrint(
         '[CookieManager] delete auth cookie variants: name=$name reason=$reason',
       );
-      await service.deleteCookie(name);
+      await service.deleteCookie(name, uri: siteUri);
     }
   }
 
   Future<void> _enforceAuthCookiePolicyIfManaged({
     required Iterable<String> names,
     required String reason,
+    required Uri siteUri,
   }) async {
     final authNames = names
         .where(CookieJarService.hostOnlyCookieNames.contains)
@@ -101,15 +104,22 @@ class AppCookieManager extends Interceptor {
     if (!service.isInitialized) return;
     if (!identical(cookieJar, service.cookieJar)) return;
 
-    await service.enforceAuthCookiePolicy(reason: reason, names: authNames);
+    await service.enforceAuthCookiePolicy(
+      reason: reason,
+      names: authNames,
+      siteUri: siteUri,
+    );
   }
 
-  Future<String?> _canonicalAuthSetCookieHeaderIfManaged(String name) async {
+  Future<String?> _canonicalAuthSetCookieHeaderIfManaged(
+    String name,
+    Uri siteUri,
+  ) async {
     if (!CookieJarService.hostOnlyCookieNames.contains(name)) return null;
     final service = CookieJarService();
     if (!service.isInitialized) return null;
     if (!identical(cookieJar, service.cookieJar)) return null;
-    final canonical = await service.getCanonicalCookie(name);
+    final canonical = await service.getCanonicalCookie(name, uri: siteUri);
     return canonical?.toSetCookieHeader();
   }
 
@@ -129,7 +139,9 @@ class AppCookieManager extends Interceptor {
 
   static List<Cookie> _selectCookies(List<Cookie> cookies, Uri uri) {
     final requestHost = uri.host.toLowerCase();
-    final baseHost = CookieJarService.appBaseHost;
+    final baseHost =
+        DiscourseSiteRegistry.byHost(requestHost)?.host ??
+        CookieJarService.appBaseHost;
     final sortedCookies = [...cookies]
       ..sort((a, b) {
         if (a.path == null && b.path == null) {
@@ -156,7 +168,7 @@ class AppCookieManager extends Interceptor {
           : '${cookie.name}|${cookie.path ?? '/'}';
       final existing = selected[key];
       if (existing == null ||
-          _compareCookiePriority(cookie, existing, requestHost) > 0) {
+          _compareCookiePriority(cookie, existing, requestHost, baseHost) > 0) {
         selected[key] = cookie;
       }
     }
@@ -167,7 +179,7 @@ class AppCookieManager extends Interceptor {
         final pathB = b.path?.length ?? 0;
         final pathCompare = pathB.compareTo(pathA);
         if (pathCompare != 0) return pathCompare;
-        return _compareCookiePriority(b, a, requestHost);
+        return _compareCookiePriority(b, a, requestHost, baseHost);
       });
 
     return deduped;
@@ -177,10 +189,11 @@ class AppCookieManager extends Interceptor {
     Cookie candidate,
     Cookie existing,
     String requestHost,
+    String baseHost,
   ) {
     final scoreDiff =
-        _cookiePriorityScore(candidate, requestHost) -
-        _cookiePriorityScore(existing, requestHost);
+        _cookiePriorityScore(candidate, requestHost, baseHost) -
+        _cookiePriorityScore(existing, requestHost, baseHost);
     if (scoreDiff != 0) return scoreDiff;
 
     final candidateDomainLength =
@@ -210,7 +223,11 @@ class AppCookieManager extends Interceptor {
     return candidate.value.length.compareTo(existing.value.length);
   }
 
-  static int _cookiePriorityScore(Cookie cookie, String requestHost) {
+  static int _cookiePriorityScore(
+    Cookie cookie,
+    String requestHost,
+    String baseHost,
+  ) {
     final normalizedDomain = cookie.domain?.trim().toLowerCase().replaceFirst(
       RegExp(r'^\.'),
       '',
@@ -232,7 +249,7 @@ class AppCookieManager extends Interceptor {
     }
 
     if (isHostOnlyAuth) {
-      if (requestHost == CookieJarService.appBaseHost) score += 2000;
+      if (requestHost == baseHost) score += 2000;
       if (isRootPath) score += 1500;
       if (cookie.httpOnly) score += 250;
       if (cookie.secure) score += 250;
@@ -670,12 +687,14 @@ class AppCookieManager extends Interceptor {
           .where((entry) => entry.value == SweepIntent.delete)
           .map((entry) => entry.key),
       reason: 'dio_response_delete',
+      siteUri: resolvedUri,
     );
     await _enforceAuthCookiePolicyIfManaged(
       names: authIntents.entries
           .where((entry) => entry.value == SweepIntent.ensureUnique)
           .map((entry) => entry.key),
       reason: 'dio_response',
+      siteUri: resolvedUri,
     );
 
     if (hasAuthSessionToken) {
@@ -698,7 +717,10 @@ class AppCookieManager extends Interceptor {
         if (cookie.name == 'cf_clearance') continue;
         if (_intentForCookie(cookie) == SweepIntent.delete) continue;
         final rawSetCookie =
-            await _canonicalAuthSetCookieHeaderIfManaged(cookie.name) ??
+            await _canonicalAuthSetCookieHeaderIfManaged(
+              cookie.name,
+              resolvedUri,
+            ) ??
             filteredSetCookieHeaders[i];
         await RawCookieWriter.instance.setRawCookie(
           resolvedUri.toString(),
@@ -752,12 +774,14 @@ class AppCookieManager extends Interceptor {
                 .where((entry) => entry.value == SweepIntent.delete)
                 .map((entry) => entry.key),
             reason: 'redirect_response_delete',
+            siteUri: redirectUri,
           );
           await _enforceAuthCookiePolicyIfManaged(
             names: redirectAuthIntents.entries
                 .where((entry) => entry.value == SweepIntent.ensureUnique)
                 .map((entry) => entry.key),
             reason: 'redirect_response',
+            siteUri: redirectUri,
           );
         }),
       );

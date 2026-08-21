@@ -5,7 +5,7 @@ import 'dart:io' as io;
 import 'package:flutter/foundation.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 
-import '../constants.dart';
+import '../config/discourse_site.dart';
 import '../utils/frame_jank_monitor.dart';
 import 'log/log_writer.dart';
 import 'network/cookie/boundary_sync_service.dart';
@@ -14,6 +14,7 @@ import 'network/cookie/webview_cookie_priming.dart';
 import 'preloaded_data_service.dart';
 import 'webview_settings.dart';
 import 'windows_webview_environment_service.dart';
+import 'active_site_service.dart';
 
 /// WebView session bootstrap 的执行结果。
 ///
@@ -63,9 +64,25 @@ class SessionBootstrapResult {
 /// JS/网络栈 POST，让服务端自然产生 HttpOnly session cookie。随后全量同步
 /// WebView cookie store 回 CookieJar。
 class WebViewSessionCookieRefreshService {
-  WebViewSessionCookieRefreshService._();
-  static final WebViewSessionCookieRefreshService instance =
-      WebViewSessionCookieRefreshService._();
+  WebViewSessionCookieRefreshService._(DiscourseSite site)
+    : _siteBaseUrl = site.baseUrl,
+      _siteUri = site.uri,
+      _preloaded = PreloadedDataService.forSite(site);
+  static final Map<String, WebViewSessionCookieRefreshService> _instances = {};
+  static WebViewSessionCookieRefreshService get instance {
+    return forSite(ActiveSiteService.instance.current);
+  }
+
+  static WebViewSessionCookieRefreshService forSite(DiscourseSite site) {
+    return _instances.putIfAbsent(
+      site.id,
+      () => WebViewSessionCookieRefreshService._(site),
+    );
+  }
+
+  final String _siteBaseUrl;
+  final Uri _siteUri;
+  final PreloadedDataService _preloaded;
 
   static const Duration _attemptCooldown = Duration(seconds: 45);
   static const Duration _successTtl = Duration(minutes: 15);
@@ -179,7 +196,7 @@ class WebViewSessionCookieRefreshService {
       await _jar.initialize();
     }
 
-    final tToken = await _jar.getTToken();
+    final tToken = await _jar.getTToken(uri: _siteUri);
     if (tToken == null || tToken.isEmpty) {
       _logEnsureEvent(
         event: 'webview_session_sync_skipped',
@@ -315,7 +332,7 @@ class WebViewSessionCookieRefreshService {
 
     try {
       WebViewCookiePriming.instance.invalidate();
-      await WebViewCookiePriming.instance.prime(AppConstants.baseUrl);
+      await WebViewCookiePriming.instance.prime(_siteBaseUrl);
     } catch (e) {
       debugPrint('[WebViewSessionSync] WebView cookie priming 失败，继续尝试: $e');
     }
@@ -329,7 +346,7 @@ class WebViewSessionCookieRefreshService {
       if (c == null) return;
 
       await BoundarySyncService.instance.syncFromWebView(
-        currentUrl: AppConstants.baseUrl,
+        currentUrl: _siteBaseUrl,
         controller: c,
         cookieNames: null,
         allowLowConfidenceSessionCookies: true,
@@ -379,7 +396,7 @@ class WebViewSessionCookieRefreshService {
       } else {
         await c.loadData(
           data: _bootstrapHtml,
-          baseUrl: WebUri(AppConstants.baseUrl),
+          baseUrl: WebUri(_siteBaseUrl),
           mimeType: 'text/html',
           encoding: 'utf-8',
         );
@@ -398,7 +415,7 @@ class WebViewSessionCookieRefreshService {
       final bootstrap = await runOnController(
         c,
         reason: reason,
-        pluginCandidates: PreloadedDataService().pluginCandidatesSync,
+        pluginCandidates: _preloaded.pluginCandidatesSync,
       );
       if (!bootstrap.ok) {
         await syncCookies();
@@ -413,7 +430,7 @@ class WebViewSessionCookieRefreshService {
 
       await syncCookies();
       await logCookieSummary(reason: reason, bootstrapOk: true);
-      final tToken = await _jar.getTToken();
+      final tToken = await _jar.getTToken(uri: _siteUri);
       if (tToken != null && tToken.isNotEmpty) {
         _lastSuccessAt = DateTime.now();
         _lastSuccessToken = tToken;
@@ -465,7 +482,7 @@ class WebViewSessionCookieRefreshService {
       if (!_jar.isInitialized) {
         await _jar.initialize();
       }
-      final uri = Uri.parse(AppConstants.baseUrl);
+      final uri = Uri.parse(_siteBaseUrl);
       final details = await _jar.getCookieDiagnosticsForRequest(uri);
       final names = details
           .map((cookie) => cookie['name']?.toString())
@@ -585,7 +602,7 @@ class WebViewSessionCookieRefreshService {
         // 端点 404 / 候选里找不到插件 = 弹药过期,下一轮强制新鲜 discover;
         // 同时废掉 PreloadedDataService 里的旧候选,别的调用方也不再拿它。
         _forceFreshPlugin = true;
-        PreloadedDataService().invalidatePluginCandidates();
+        _preloaded.invalidatePluginCandidates();
       }
       debugPrint(
         '[WebViewSessionSync] bootstrap result: ok=$ok cfBlocked=$cfBlocked '
@@ -663,7 +680,7 @@ document.close();
     );
   }
 
-  String get _windowsBootstrapUrl => '${AppConstants.baseUrl}/robots.txt';
+  String get _windowsBootstrapUrl => '${_siteBaseUrl}/robots.txt';
 
   String get _bootstrapHtml =>
       '<!DOCTYPE html><html><head><meta charset="utf-8"></head>'
@@ -671,7 +688,7 @@ document.close();
 
   String _bootstrapScript(String handlerName) {
     final handler = jsonEncode(handlerName);
-    final baseUrl = jsonEncode(AppConstants.baseUrl);
+    final baseUrl = jsonEncode(_siteBaseUrl);
     return '''
 (async function() {
   const handlerName = $handler;

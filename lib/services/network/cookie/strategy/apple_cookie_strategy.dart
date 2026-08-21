@@ -2,7 +2,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 
-import '../../../../constants.dart';
+import '../../../../config/discourse_site.dart';
 import 'default_cookie_strategy.dart';
 
 /// Apple (iOS / macOS) cookie 策略
@@ -10,7 +10,9 @@ import 'default_cookie_strategy.dart';
 /// WKWebView 的 sharedCookiesEnabled 会从 HTTPCookieStorage.shared 读 cookie。
 /// 仅清 WKHTTPCookieStore 不够，需要同时清 HTTPCookieStorage.shared。
 class AppleCookieStrategy extends DefaultCookieStrategy {
-  static const _nativeCookieChannel = MethodChannel('com.fluxdo/cookie_storage');
+  static const _nativeCookieChannel = MethodChannel(
+    'com.fluxdo/cookie_storage',
+  );
 
   @override
   Future<void> clearWebViewCookies(
@@ -22,12 +24,27 @@ class AppleCookieStrategy extends DefaultCookieStrategy {
 
     // 同时清除 HTTPCookieStorage.shared
     try {
-      await _nativeCookieChannel.invokeMethod(
-        'clearCookies',
-        AppConstants.baseUrl,
-      );
+      for (final site in DiscourseSiteRegistry.all) {
+        await _nativeCookieChannel.invokeMethod('clearCookies', site.baseUrl);
+      }
     } catch (e) {
       debugPrint('[CookieStrategy][Apple] HTTPCookieStorage clear failed: $e');
+    }
+  }
+
+  @override
+  Future<void> clearWebViewCookiesForSite(
+    CookieManager cookieManager,
+    Set<String> knownHosts,
+    String baseUrl,
+  ) async {
+    await super.clearWebViewCookiesForSite(cookieManager, knownHosts, baseUrl);
+
+    // sharedCookiesEnabled 还会读取 HTTPCookieStorage.shared，原生层按域精确删。
+    try {
+      await _nativeCookieChannel.invokeMethod('clearCookies', baseUrl);
+    } catch (e) {
+      debugPrint('[CookieStrategy][Apple] 站点 shared cookie 清理失败: $e');
     }
   }
 }

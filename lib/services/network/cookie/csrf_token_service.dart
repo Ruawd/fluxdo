@@ -3,6 +3,8 @@ import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 
 import '../../../constants.dart';
+import '../../../config/discourse_site.dart';
+import '../../active_site_service.dart';
 import '../../app_logger.dart';
 import '../adapters/platform_adapter.dart';
 import '../interceptors/cf_challenge_interceptor.dart';
@@ -13,11 +15,26 @@ import '../../storage/resilient_secure_storage.dart';
 /// Cookie 同步服务
 /// 管理 CSRF token，支持自动刷新（对齐 Discourse 官方前端策略）
 class CsrfTokenService {
-  static final CsrfTokenService _instance = CsrfTokenService._internal();
-  factory CsrfTokenService() => _instance;
-  CsrfTokenService._internal();
+  static final Map<String, CsrfTokenService> _instances = {};
+  factory CsrfTokenService() {
+    return forSite(ActiveSiteService.instance.current);
+  }
 
-  static const String _csrfTokenKey = 'linux_do_csrf_token';
+  static CsrfTokenService forSite(DiscourseSite site) {
+    return _instances.putIfAbsent(
+      site.id,
+      () => CsrfTokenService._internal(site),
+    );
+  }
+
+  CsrfTokenService._internal(DiscourseSite site)
+    : _site = site,
+      _siteBaseUrl = site.baseUrl,
+      _csrfTokenKey = site.scopedStorageKey('linux_do_csrf_token');
+
+  final DiscourseSite _site;
+  final String _siteBaseUrl;
+  final String _csrfTokenKey;
 
   final ResilientSecureStorage _storage = ResilientSecureStorage();
 
@@ -68,7 +85,7 @@ class CsrfTokenService {
 
     final dio = Dio(
       BaseOptions(
-        baseUrl: AppConstants.baseUrl,
+        baseUrl: _siteBaseUrl,
         connectTimeout: const Duration(seconds: 30),
         receiveTimeout: const Duration(seconds: 30),
         followRedirects: false,
@@ -99,7 +116,11 @@ class CsrfTokenService {
     // 必须装 CfChallengeInterceptor: jar 没 cf_clearance 时 CSRF 也会被 CF 403,
     // 没这个 interceptor → silent fail → 整条 native 登录链路死锁。
     dio.interceptors.add(
-      CfChallengeInterceptor(dio: dio, cookieJarService: cookieJarService),
+      CfChallengeInterceptor(
+        dio: dio,
+        cookieJarService: cookieJarService,
+        site: _site,
+      ),
     );
     _mainSiteDio = dio;
     return dio;

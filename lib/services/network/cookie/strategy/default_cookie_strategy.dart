@@ -23,6 +23,58 @@ class DefaultCookieStrategy implements PlatformCookieStrategy {
   }
 
   @override
+  Future<void> clearWebViewCookiesForSite(
+    CookieManager cookieManager,
+    Set<String> knownHosts,
+    String baseUrl,
+  ) async {
+    final baseHost = Uri.parse(baseUrl).host.toLowerCase();
+    bool related(String? rawDomain) {
+      final domain = rawDomain?.trim().toLowerCase().replaceFirst(
+        RegExp(r'^\.'),
+        '',
+      );
+      if (domain == null || domain.isEmpty) return false;
+      return domain == baseHost || domain.endsWith('.$baseHost');
+    }
+
+    // getAllCookies 能覆盖只存在于 WebView、尚未同步进 jar 的子域 cookie。
+    try {
+      final all = await cookieManager.getAllCookies();
+      for (final cookie in all.where((cookie) => related(cookie.domain))) {
+        final domain = cookie.domain?.replaceFirst(RegExp(r'^\.'), '').trim();
+        final host = domain == null || domain.isEmpty ? baseHost : domain;
+        await cookieManager.deleteCookie(
+          url: WebUri('https://$host'),
+          name: cookie.name,
+          domain: cookie.domain,
+          path: cookie.path ?? '/',
+        );
+      }
+    } catch (e) {
+      debugPrint('[CookieStrategy] getAllCookies 精确清理失败，继续逐 host: $e');
+    }
+
+    // host-only cookie 在部分平台的 getAllCookies 结果不带 domain，逐 host 兜底。
+    for (final host in {...knownHosts, baseHost}) {
+      try {
+        final url = WebUri('https://$host');
+        final cookies = await cookieManager.getCookies(url: url);
+        for (final cookie in cookies) {
+          await cookieManager.deleteCookie(
+            url: url,
+            name: cookie.name,
+            domain: cookie.domain,
+            path: cookie.path ?? '/',
+          );
+        }
+      } catch (e) {
+        debugPrint('[CookieStrategy] 逐 host 清理失败 host=$host: $e');
+      }
+    }
+  }
+
+  @override
   Future<int> writeRawCookiesToWebView(
     List<(String url, String rawHeader)> entries,
   ) async {

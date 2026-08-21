@@ -57,16 +57,36 @@ class DraftController {
   /// 当前正在进行的保存操作
   Future<void>? _saveFuture;
 
-  DraftController({
-    required this.draftKey,
+  factory DraftController({
+    required String draftKey,
     DiscourseService? service,
     LocalDraftStore? localStore,
     Future<String?> Function()? accountIdResolver,
-  }) : _service = service ?? DiscourseService(),
-       _localStore = localStore ?? LocalDraftStore(),
-       _accountIdResolver =
-           accountIdResolver ??
-           (() => (service ?? DiscourseService()).getUsername());
+  }) {
+    final resolvedService = service ?? DiscourseService();
+    final site = resolvedService.site;
+    return DraftController._(
+      draftKey: draftKey,
+      service: resolvedService,
+      localStore: localStore ?? LocalDraftStore(),
+      accountIdResolver:
+          accountIdResolver ??
+          () async {
+            final username = await resolvedService.getUsername();
+            if (username == null || username.isEmpty) return null;
+            return site.scopedAccountId(username);
+          },
+    );
+  }
+
+  DraftController._({
+    required this.draftKey,
+    required DiscourseService service,
+    required LocalDraftStore localStore,
+    required Future<String?> Function() accountIdResolver,
+  }) : _service = service,
+       _localStore = localStore,
+       _accountIdResolver = accountIdResolver;
 
   /// 加载现有草稿
   /// 返回草稿数据，如果不存在返回 null

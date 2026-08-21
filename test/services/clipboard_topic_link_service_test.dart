@@ -23,6 +23,8 @@ void main() {
             'https://linux.do/t/topic-slug/123',
         'https://linux.do/t/topic-slug/123/5':
             'https://linux.do/t/topic-slug/123/5',
+        'https://idcflare.com/t/idc-topic/456':
+            'https://idcflare.com/t/idc-topic/456',
       };
 
       for (final entry in cases.entries) {
@@ -60,6 +62,13 @@ void main() {
 
       expect(candidate, isNotNull);
       expect(candidate!.normalizedUrl, 'https://linux.do/t/123');
+    });
+
+    test('支持无 scheme 的 IDC Flare 链接', () {
+      final candidate = service.findFirstTopicLink('idcflare.com/t/456。');
+
+      expect(candidate, isNotNull);
+      expect(candidate!.normalizedUrl, 'https://idcflare.com/t/456');
     });
 
     test('用户页、登录链接、普通页面、非 linux.do 域名不触发', () {

@@ -20,7 +20,7 @@ mixin _TopicsMixin on _DiscourseServiceBase {
 
   Future<TopicListResponse> getLatestTopics({int page = 0, String? order, bool? ascending}) async {
     if (page == 0 && order == null) {
-      final preloaded = PreloadedDataService();
+      final preloaded = PreloadedDataService.forSite(_site);
       final preloadedList = await preloaded.getInitialTopicList();
       if (preloadedList != null) {
         return preloadedList;

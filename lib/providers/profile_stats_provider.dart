@@ -1,17 +1,31 @@
 import 'dart:async';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../models/profile_stats_config.dart';
 import 'theme_provider.dart'; // sharedPreferencesProvider
-
-const String _configKey = 'profile_stats_config';
+import '../services/active_site_service.dart';
 
 /// 统计卡片配置 Provider
 class ProfileStatsConfigNotifier extends Notifier<ProfileStatsConfig> {
   Timer? _saveTimer;
+  late String _configKey;
+  late SharedPreferences _prefs;
+  ProfileStatsConfig? _pendingSave;
+
   @override
   ProfileStatsConfig build() {
-    final prefs = ref.watch(sharedPreferencesProvider);
-    final jsonStr = prefs.getString(_configKey);
+    _configKey = ActiveSiteService.instance.scopedStorageKey(
+      'profile_stats_config',
+    );
+    _prefs = ref.watch(sharedPreferencesProvider);
+    ref.onDispose(() {
+      _saveTimer?.cancel();
+      final pending = _pendingSave;
+      if (pending != null) {
+        _prefs.setString(_configKey, pending.toJsonString());
+      }
+    });
+    final jsonStr = _prefs.getString(_configKey);
     if (jsonStr != null) {
       try {
         return ProfileStatsConfig.fromJsonString(jsonStr);
@@ -40,10 +54,7 @@ class ProfileStatsConfigNotifier extends Notifier<ProfileStatsConfig> {
     final compatible = state.enabledStats
         .where((s) => isStatCompatible(s, source))
         .toList();
-    update(state.copyWith(
-      dataSource: source,
-      enabledStats: compatible,
-    ));
+    update(state.copyWith(dataSource: source, enabledStats: compatible));
   }
 
   void setEnabledStats(List<ProfileStatType> stats) {
@@ -52,16 +63,16 @@ class ProfileStatsConfigNotifier extends Notifier<ProfileStatsConfig> {
 
   void addStat(ProfileStatType stat) {
     if (!state.enabledStats.contains(stat)) {
-      update(state.copyWith(
-        enabledStats: [...state.enabledStats, stat],
-      ));
+      update(state.copyWith(enabledStats: [...state.enabledStats, stat]));
     }
   }
 
   void removeStat(ProfileStatType stat) {
-    update(state.copyWith(
-      enabledStats: state.enabledStats.where((s) => s != stat).toList(),
-    ));
+    update(
+      state.copyWith(
+        enabledStats: state.enabledStats.where((s) => s != stat).toList(),
+      ),
+    );
   }
 
   void reorderStats(int oldIndex, int newIndex) {
@@ -75,14 +86,15 @@ class ProfileStatsConfigNotifier extends Notifier<ProfileStatsConfig> {
   /// 防抖保存（300ms 内多次操作只写一次磁盘）
   void _save(ProfileStatsConfig config) {
     _saveTimer?.cancel();
+    _pendingSave = config;
     _saveTimer = Timer(const Duration(milliseconds: 300), () {
-      final prefs = ref.read(sharedPreferencesProvider);
-      prefs.setString(_configKey, config.toJsonString());
+      _prefs.setString(_configKey, config.toJsonString());
+      _pendingSave = null;
     });
   }
 }
 
 final profileStatsConfigProvider =
     NotifierProvider<ProfileStatsConfigNotifier, ProfileStatsConfig>(
-  ProfileStatsConfigNotifier.new,
-);
+      ProfileStatsConfigNotifier.new,
+    );

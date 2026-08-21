@@ -9,6 +9,8 @@ import 'package:app_icons/app_icons.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../constants.dart';
+import '../config/discourse_site.dart';
+import 'active_site_service.dart';
 import 'network/cookie/boundary_sync_service.dart';
 import 'network/cookie/cookie_jar_service.dart';
 import 'local_notification_service.dart'; // 用于获取全局 navigatorKey
@@ -29,9 +31,22 @@ CookieManager get _cfCookieManager =>
 /// CF 验证服务
 /// 处理 Cloudflare Turnstile 验证（仅手动模式）
 class CfChallengeService {
-  static final CfChallengeService _instance = CfChallengeService._internal();
-  factory CfChallengeService() => _instance;
-  CfChallengeService._internal();
+  static final Map<String, CfChallengeService> _instances = {};
+  factory CfChallengeService() {
+    return forSite(ActiveSiteService.instance.current);
+  }
+
+  static CfChallengeService forSite(DiscourseSite site) {
+    return _instances.putIfAbsent(
+      site.id,
+      () => CfChallengeService._internal(site),
+    );
+  }
+
+  CfChallengeService._internal(DiscourseSite site)
+    : _challengeUrl = site.challengeUrl;
+
+  final String _challengeUrl;
 
   bool _isVerifying = false;
   bool? _completedVerificationResult;
@@ -344,7 +359,7 @@ class CfChallengeService {
       return null;
     }
 
-    final verifyUrl = '${AppConstants.baseUrl}/challenge';
+    final verifyUrl = _challengeUrl;
     CfChallengeLogger.logVerifyStart(verifyUrl);
 
     // 尝试获取 context：传入的 > 已设置的 > 全局 navigatorKey
@@ -716,7 +731,7 @@ class _CfChallengePageState extends State<CfChallengePage> {
   Future<String?> _readCookieValue(String name) async {
     try {
       final cookie = await _cfCookieManager.getCookie(
-        url: WebUri(AppConstants.baseUrl),
+        url: WebUri(widget.verifyUrl),
         name: name,
       );
       if (cookie != null && cookie.value.isNotEmpty) {
@@ -736,11 +751,17 @@ class _CfChallengePageState extends State<CfChallengePage> {
       if (liveValue != null && liveValue.isNotEmpty) {
         return liveValue;
       }
-      return CookieJarService().getCookieValue(name);
+      return CookieJarService().getCookieValue(
+        name,
+        uri: Uri.parse(widget.verifyUrl),
+      );
     }
 
     if (io.Platform.isWindows) {
-      return CookieJarService().getCookieValue(name);
+      return CookieJarService().getCookieValue(
+        name,
+        uri: Uri.parse(widget.verifyUrl),
+      );
     }
 
     // Linux WPE: getCookie() 内部已调 getCookies(url) 做 URL 过滤，
@@ -1040,7 +1061,9 @@ class _CfChallengePageState extends State<CfChallengePage> {
       );
       await _syncLiveCookiesToCookieJar(freshClearance: cookieValue);
       // 验证 cf_clearance 是否真正写入了 CookieJar
-      final synced = await CookieJarService().getCfClearance();
+      final synced = await CookieJarService().getCfClearance(
+        uri: Uri.parse(widget.verifyUrl),
+      );
       if (synced != null && synced.isNotEmpty) {
         debugPrint(
           '[CfChallenge] cf_clearance 已同步到 CookieJar (${synced.length} chars)',

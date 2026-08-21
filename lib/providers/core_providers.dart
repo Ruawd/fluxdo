@@ -4,9 +4,11 @@ import 'dart:async';
 import 'dart:convert';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import '../config/discourse_site.dart';
 import '../models/user.dart';
 import '../services/discourse/discourse_service.dart';
 import '../services/preloaded_data_service.dart';
+import '../services/active_site_service.dart';
 
 /// Discourse 服务 Provider
 final discourseServiceProvider = Provider((ref) => DiscourseService());
@@ -26,15 +28,17 @@ final authStateProvider = StreamProvider<void>((ref) {
 /// 当前用户 Provider
 /// 优先使用预加载数据同步返回，避免启动时短暂显示未登录状态
 class CurrentUserNotifier extends AsyncNotifier<User?> {
-  static const String _cacheKey = 'current_user_cache';
-  static const String _cacheUserKey = 'current_user_cache_username';
+  final DiscourseSite _site = ActiveSiteService.instance.current;
+  String get _cacheKey => _site.scopedStorageKey('current_user_cache');
+  String get _cacheUserKey =>
+      _site.scopedStorageKey('current_user_cache_username');
   static const Duration _refreshCooldown = Duration(minutes: 2);
   DateTime? _lastRefreshTime;
 
   @override
   FutureOr<User?> build() {
     final service = ref.read(discourseServiceProvider);
-    final preloaded = PreloadedDataService().currentUserSync;
+    final preloaded = PreloadedDataService.forSite(_site).currentUserSync;
     if (preloaded != null) {
       final preloadedUser = User.fromJson(preloaded);
       service.currentUserNotifier.value = preloadedUser;
@@ -182,13 +186,16 @@ final currentUserProvider = AsyncNotifierProvider<CurrentUserNotifier, User?>(
 /// 系统用户头像模板 Provider
 /// 用于通知列表中没有 acting_user 时的默认头像
 final systemUserAvatarTemplateProvider = FutureProvider<String?>((ref) async {
-  return PreloadedDataService().getSystemUserAvatarTemplate();
+  final site = ActiveSiteService.instance.current;
+  return PreloadedDataService.forSite(site).getSystemUserAvatarTemplate();
 });
 
 /// 用户统计数据 Provider
 class UserSummaryNotifier extends AsyncNotifier<UserSummary?> {
-  static const String _cacheKey = 'user_summary_cache';
-  static const String _cacheUserKey = 'user_summary_cache_username';
+  final DiscourseSite _site = ActiveSiteService.instance.current;
+  String get _cacheKey => _site.scopedStorageKey('user_summary_cache');
+  String get _cacheUserKey =>
+      _site.scopedStorageKey('user_summary_cache_username');
 
   @override
   Future<UserSummary?> build() async {

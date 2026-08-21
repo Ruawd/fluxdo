@@ -7,6 +7,9 @@ import 'package:flutter/foundation.dart';
 import 'package:html/parser.dart' as html_parser;
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../config/discourse_site.dart';
+import '../constants.dart';
+
 class AiPostReviewException implements Exception {
   AiPostReviewException(this.message, {this.details});
 
@@ -74,16 +77,19 @@ class AiPostReviewService {
     required AiPostReviewApiKeyLoader apiKeyLoader,
     Dio? dio,
     AiPostReviewGuidelinesFetcher? guidelinesFetcher,
+    DiscourseSite? site,
   }) : _prefs = prefs,
        _chatService = chatService,
        _apiKeyLoader = apiKeyLoader,
        _dio = dio,
-       _guidelinesFetcher = guidelinesFetcher;
+       _guidelinesFetcher = guidelinesFetcher,
+       _site = site ?? AppConstants.site;
 
-  static const guidelinesUrl = 'https://linux.do/guidelines';
-  static const _guidelinesCacheKey = 'ai_post_review_guidelines_cache';
-  static const _guidelinesCacheUpdatedAtKey =
-      'ai_post_review_guidelines_cache_updated_at';
+  String get _guidelinesUrl => '${_site.baseUrl}/guidelines';
+  String get _guidelinesCacheKey =>
+      _site.scopedStorageKey('ai_post_review_guidelines_cache');
+  String get _guidelinesCacheUpdatedAtKey =>
+      _site.scopedStorageKey('ai_post_review_guidelines_cache_updated_at');
   static const _maxGuidelinesChars = 12000;
   static const _guidelinesReceiveTimeout = Duration(seconds: 10);
   static const _guidelinesOverallTimeout = Duration(seconds: 12);
@@ -93,6 +99,7 @@ class AiPostReviewService {
   final AiPostReviewApiKeyLoader _apiKeyLoader;
   final Dio? _dio;
   final AiPostReviewGuidelinesFetcher? _guidelinesFetcher;
+  final DiscourseSite _site;
 
   Future<AiPostReviewResult> review(AiPostReviewRequest request) async {
     if (!request.model.output.contains(Modality.text)) {
@@ -111,7 +118,10 @@ class AiPostReviewService {
         provider: request.provider,
         model: request.model.id,
         apiKey: apiKey.trim(),
-        systemPrompt: buildSystemPrompt(guidelines.text),
+        systemPrompt: buildSystemPrompt(
+          guidelines.text,
+          communityName: _site.displayName,
+        ),
         messages: [
           AiChatMessage(
             id: 'post-review-request',
@@ -158,7 +168,7 @@ class AiPostReviewService {
         return _GuidelinesLoadResult(text: cached, usedCache: true);
       }
       throw AiPostReviewException(
-        '无法获取 Linux.do 社区准则，也没有可用缓存。',
+        '无法获取 ${_site.displayName} 社区准则，也没有可用缓存。',
         details: '$error\n$stackTrace',
       );
     }
@@ -171,7 +181,7 @@ class AiPostReviewService {
     }
     final response = await dio
         .get<String>(
-          guidelinesUrl,
+          _guidelinesUrl,
           options: Options(
             responseType: ResponseType.plain,
             receiveTimeout: _guidelinesReceiveTimeout,
@@ -204,9 +214,11 @@ class AiPostReviewService {
   }
 
   @visibleForTesting
-  static String buildSystemPrompt(String guidelines) {
+  static String buildSystemPrompt(String guidelines, {String? communityName}) {
+    final resolvedCommunityName =
+        communityName ?? AppConstants.site.displayName;
     return '''
-你是 Linux.do 社区发帖前的本地 AI 审核助手。你的任务是根据社区准则帮助用户发现可能需要修改的地方。
+你是 $resolvedCommunityName 社区发帖前的本地 AI 审核助手。你的任务是根据社区准则帮助用户发现可能需要修改的地方。
 
 硬性要求，必须遵守：
 1. 只输出整体优先级和 1-3 条建议修改方向，不得提供完整改写内容。

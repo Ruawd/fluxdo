@@ -4,7 +4,7 @@ part of 'discourse_service.dart';
 mixin _CategoriesMixin on _DiscourseServiceBase {
   /// 获取站点信息（包含所有分类）
   Future<List<Category>> getCategories() async {
-    final preloaded = PreloadedDataService();
+    final preloaded = PreloadedDataService.forSite(_site);
     final preloadedCategories = await preloaded.getCategories();
     if (preloadedCategories != null && preloadedCategories.isNotEmpty) {
       return preloadedCategories;
@@ -17,7 +17,7 @@ mixin _CategoriesMixin on _DiscourseServiceBase {
 
   /// 获取站点热门标签
   Future<List<String>> getTags() async {
-    final preloaded = PreloadedDataService();
+    final preloaded = PreloadedDataService.forSite(_site);
     final preloadedTags = await preloaded.getTopTags();
     if (preloadedTags != null) {
       return preloadedTags;
@@ -98,7 +98,7 @@ mixin _CategoriesMixin on _DiscourseServiceBase {
 
   /// 检查站点是否支持标签功能
   Future<bool> canTagTopics() async {
-    final preloaded = PreloadedDataService();
+    final preloaded = PreloadedDataService.forSite(_site);
     final canTag = await preloaded.canTagTopics();
     if (canTag != null) {
       return canTag;
@@ -115,27 +115,27 @@ mixin _CategoriesMixin on _DiscourseServiceBase {
 
   /// 获取话题标题最小长度
   Future<int> getMinTopicTitleLength() async {
-    return PreloadedDataService().getMinTopicTitleLength();
+    return PreloadedDataService.forSite(_site).getMinTopicTitleLength();
   }
 
   /// 获取私信标题最小长度
   Future<int> getMinPmTitleLength() async {
-    return PreloadedDataService().getMinPmTitleLength();
+    return PreloadedDataService.forSite(_site).getMinPmTitleLength();
   }
 
   /// 获取回复内容最小长度
   Future<int> getMinPostLength() async {
-    return PreloadedDataService().getMinPostLength();
+    return PreloadedDataService.forSite(_site).getMinPostLength();
   }
 
   /// 获取首贴内容最小长度
   Future<int> getMinFirstPostLength() async {
-    return PreloadedDataService().getMinFirstPostLength();
+    return PreloadedDataService.forSite(_site).getMinFirstPostLength();
   }
 
   /// 获取私信内容最小长度
   Future<int> getMinPmPostLength() async {
-    return PreloadedDataService().getMinPmPostLength();
+    return PreloadedDataService.forSite(_site).getMinPmPostLength();
   }
 
   /// 设置分类通知级别

@@ -44,6 +44,8 @@
   "login_qrShowCode": "Show login QR code",
   "login_qrSuccess": "Signed in via QR code",
   "login_scanToLogin": "Scan QR to sign in",
+  "login_continueWithLinuxDo": "Continue with Linux.do",
+  "login_siteExternalOnly": "IDC Flare uses Linux.do account authorization. Sign-in will be completed in the in-app browser.",
   "login_slogan": "Sincere, Friendly, United, Professional",
   "migration_cookieUpgrade": "Upgrading cookie storage...",
   "migration_reloginRequired": "Cookie storage has been upgraded. Your login session was cleared. Please log in again.",

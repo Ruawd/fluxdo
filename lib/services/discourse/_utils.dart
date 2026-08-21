@@ -35,13 +35,13 @@ mixin _UtilsMixin on _DiscourseServiceBase {
 
   /// 获取可用的回应表情列表
   Future<List<String>> getEnabledReactions() async {
-    final preloaded = PreloadedDataService();
+    final preloaded = PreloadedDataService.forSite(_site);
     return preloaded.getEnabledReactions();
   }
 
   /// 同步获取可用回应表情列表（仅返回已 preload 结果，未 preload 时返回兜底）
   List<String> get enabledReactionsSync =>
-      PreloadedDataService().enabledReactionsSync;
+      PreloadedDataService.forSite(_site).enabledReactionsSync;
 
   /// 创建私信
   /// 参数语义同 [createReply]

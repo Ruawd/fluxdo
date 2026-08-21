@@ -9,9 +9,10 @@ import '../cookie/csrf_token_service.dart';
 /// 负责设置 User-Agent 和 CSRF Token
 /// CSRF 策略对齐 Discourse 官方前端：POST 前 token 为空则先从 /session/csrf 获取
 class RequestHeaderInterceptor extends Interceptor {
-  RequestHeaderInterceptor(this._cookieSync);
+  RequestHeaderInterceptor(this._cookieSync, this._siteBaseUrl);
 
   final CsrfTokenService _cookieSync;
+  final String _siteBaseUrl;
 
   @override
   Future<void> onRequest(
@@ -72,8 +73,8 @@ class RequestHeaderInterceptor extends Interceptor {
 
     // 4. API 请求（XHR）设置 Origin、Referer 和 Sec-Fetch-* 头
     if (options.headers['X-Requested-With'] == 'XMLHttpRequest') {
-      options.headers['Origin'] = AppConstants.baseUrl;
-      options.headers['Referer'] = '${AppConstants.baseUrl}/';
+      options.headers['Origin'] = _siteBaseUrl;
+      options.headers['Referer'] = '$_siteBaseUrl/';
       // Sec-Fetch-* 系列头：Chrome 从 2019 年起每个请求都自动添加，
       // 缺失会被 Cloudflare Bot Management 识别为非浏览器客户端
       options.headers['Sec-Fetch-Dest'] = 'empty';

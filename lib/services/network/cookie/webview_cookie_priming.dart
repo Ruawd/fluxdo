@@ -18,8 +18,8 @@ import 'session_cookie_sentinel.dart';
 ///
 /// 关键不变量：
 /// - 任何 WV 使用者在使用 WV 前必须 await [prime]
-/// - prime 是幂等的（[isPrimed] 为 true 时立即返回）
-/// - 同一 url 并发调用 [prime] 会去重（共享同一个 Future）
+/// - prime 按 origin 幂等（[isPrimedFor] 为 true 时立即返回）
+/// - 同一 origin 并发调用 [prime] 会去重（共享同一个 Future）
 class WebViewCookiePriming {
   WebViewCookiePriming._();
   static final WebViewCookiePriming instance = WebViewCookiePriming._();
@@ -48,74 +48,79 @@ class WebViewCookiePriming {
   // 内部状态
   // ---------------------------------------------------------------------------
 
-  bool _isPrimed = false;
+  /// Cookie store 可以同时保存多个社区域名，priming 状态也必须按 origin
+  /// 记录。单一 bool 会让 Linux.do 完成后把 IDC Flare 误判为已经重灌。
+  final Set<String> _primedScopes = <String>{};
 
   static const Duration _variantCleanupRetryDelay = Duration(milliseconds: 120);
   static const int _variantCleanupMaxAttempts = 2;
 
-  /// 当前进行中的 prime Future（用于同 url 并发去重）。
-  Future<void>? _primingFuture;
-  String? _primingUrl;
+  /// 各 origin 当前进行中的 prime Future（同站点并发去重，不同站点互不覆盖）。
+  final Map<String, Future<void>> _primingFutures = <String, Future<void>>{};
 
   // ---------------------------------------------------------------------------
   // 公开 API
   // ---------------------------------------------------------------------------
 
   /// 当前 WV 是否已就绪。
-  bool get isPrimed => _isPrimed;
+  bool get isPrimed => _primedScopes.isNotEmpty;
+
+  bool isPrimedFor(String url) => _primedScopes.contains(_scopeKey(url));
 
   /// 确保 WV 中的 critical cookies 与 jar 同步。
   ///
   /// 详见 §5.2 接口契约。
   Future<void> prime(String url) async {
-    if (_isPrimed) return;
+    final scope = _scopeKey(url);
+    if (_primedScopes.contains(scope)) return;
 
-    // 同 url 并发去重
-    final existing = _primingFuture;
-    if (existing != null && _primingUrl == url) {
+    // 同 origin 并发去重
+    final existing = _primingFutures[scope];
+    if (existing != null) {
       return existing;
     }
 
-    final future = _primeInternal(url);
-    _primingFuture = future;
-    _primingUrl = url;
+    final future = _primeInternal(url, scope);
+    _primingFutures[scope] = future;
 
     try {
       await future;
     } finally {
-      if (identical(_primingFuture, future)) {
-        _primingFuture = null;
-        _primingUrl = null;
+      if (identical(_primingFutures[scope], future)) {
+        _primingFutures.remove(scope);
       }
     }
   }
 
   /// 标记 WV 状态为"未就绪"。
   void invalidate() {
-    _isPrimed = false;
+    _primedScopes.clear();
   }
 
   /// 等待当前正在进行的 priming 完成（如有）。
   Future<void> awaitReady() async {
-    final future = _primingFuture;
-    if (future != null) await future;
+    final futures = _primingFutures.values.toList(growable: false);
+    if (futures.isNotEmpty) await Future.wait(futures);
   }
 
   /// 仅测试用：重置内部状态。
   @visibleForTesting
   void resetForTest() {
-    _isPrimed = false;
-    _primingFuture = null;
-    _primingUrl = null;
+    _primedScopes.clear();
+    _primingFutures.clear();
   }
 
   // ---------------------------------------------------------------------------
   // 内部实现
   // ---------------------------------------------------------------------------
 
-  Future<void> _primeInternal(String url) async {
+  Future<void> _primeInternal(String url, String scope) async {
     final stopwatch = Stopwatch()..start();
-    CookieLogger.priming(event: 'invoked', url: url, isPrimed: _isPrimed);
+    CookieLogger.priming(
+      event: 'invoked',
+      url: url,
+      isPrimed: _primedScopes.contains(scope),
+    );
     // 注册 url 到 observer, 后续 WV 外部 cookie 变化时会对该 url sweep
     CookieStoreObserver.instance.registerUrl(url);
     try {
@@ -123,7 +128,11 @@ class WebViewCookiePriming {
       if (!_jar.isInitialized) {
         await _jar.initialize();
       }
-      await _jar.enforceAuthCookiePolicy(reason: 'webview_priming');
+      final uri = Uri.parse(url);
+      await _jar.enforceAuthCookiePolicy(
+        reason: 'webview_priming',
+        siteUri: uri,
+      );
 
       // 2. 从 jar 读"当前 url 适用的所有 cookie" (RFC 6265 domain matching)
       // 不再按 criticalCookieNames 过滤 — 该列表 hard-code 维护不可持续
@@ -131,7 +140,6 @@ class WebViewCookiePriming {
       // jar 是 source of truth, loadCanonicalCookiesForRequest 已经按
       // RFC 6265 domain matching 选出"该 url 适用的全部 cookie", 直接
       // 全量同步到 WV 即可。
-      final uri = Uri.parse(url);
       final jarCookies = await _jar.loadCanonicalCookiesForRequest(uri);
 
       // 3. per-cookie 严格 "先 nuke 后写" 流程, 保证写入后 each name 恰好 1 条:
@@ -180,7 +188,10 @@ class WebViewCookiePriming {
         // - jar 已删 (返回 null): 跳过, 不再写回 WV
         // - value 变了: 用最新值 (新值更准)
         // - value 未变: 用原快照 (最常见)
-        final fresh = await _jar.getCanonicalCookie(initialCookie.name);
+        final fresh = await _jar.getCanonicalCookie(
+          initialCookie.name,
+          uri: uri,
+        );
         if (fresh == null || fresh.value.isEmpty) {
           skippedRaceRemoved++;
           debugPrint('[Priming] ${initialCookie.name} 在 priming 期间被外部删除, 跳过');
@@ -196,7 +207,7 @@ class WebViewCookiePriming {
 
         // a) 再次 race check: 上面读取是 async, 期间外部又可能删 cookie
         // 例如 sweep 跑到一半 cf_challenge_service 介入, 我们要尊重那个删除
-        final reFresh = await _jar.getCanonicalCookie(cookie.name);
+        final reFresh = await _jar.getCanonicalCookie(cookie.name, uri: uri);
         if (reFresh == null || reFresh.value.isEmpty) {
           skippedRaceRemoved++;
           attempted--;
@@ -211,6 +222,7 @@ class WebViewCookiePriming {
         final writeResult = await _writeCookieWithVariantCleanup(
           url,
           writeCookie,
+          uri,
         );
         if (writeResult.skipped) {
           skippedRaceRemoved++;
@@ -251,7 +263,7 @@ class WebViewCookiePriming {
         }
       }
 
-      // 4. verify pass (信息汇总, 不影响 _isPrimed)
+      // 4. verify pass（信息汇总，不影响其他站点的 priming 状态）
       // 用 jar 最新状态 (而非 T0 快照) 避免把"期间被外部删除"误报为 missing
       var verified = 0;
       final missingNames = <String>[];
@@ -266,7 +278,7 @@ class WebViewCookiePriming {
         }
       }
 
-      _isPrimed = true;
+      _primedScopes.add(scope);
       final hasMismatch = mismatched.isNotEmpty || missingNames.isNotEmpty;
       debugPrint(
         '[Priming] WV primed for $url: '
@@ -288,7 +300,7 @@ class WebViewCookiePriming {
       );
     } catch (e, s) {
       debugPrint('[Priming] prime $url failed: $e\n$s');
-      _isPrimed = false;
+      _primedScopes.remove(scope);
       CookieLogger.priming(
         event: 'failed',
         url: url,
@@ -302,6 +314,7 @@ class WebViewCookiePriming {
   Future<_PrimeWriteResult> _writeCookieWithVariantCleanup(
     String url,
     CanonicalCookie cookie,
+    Uri uri,
   ) async {
     var written = false;
     var postCount = 0;
@@ -312,7 +325,7 @@ class WebViewCookiePriming {
         intent: SweepIntent.delete,
         force: true,
       );
-      final fresh = await _jar.getCanonicalCookie(cookie.name);
+      final fresh = await _jar.getCanonicalCookie(cookie.name, uri: uri);
       if (fresh == null || fresh.value.isEmpty || _isExpired(fresh)) {
         postCount = await _writer.countCookiesByName(url, cookie.name);
         return _PrimeWriteResult(
@@ -369,6 +382,11 @@ class WebViewCookiePriming {
   bool _isExpired(CanonicalCookie cookie) {
     final expiresAt = cookie.expiresAt;
     return expiresAt != null && expiresAt.isBefore(DateTime.now());
+  }
+
+  String _scopeKey(String url) {
+    final uri = Uri.tryParse(url);
+    return uri == null || !uri.hasScheme || uri.host.isEmpty ? url : uri.origin;
   }
 
   Future<bool> _isAcceptableDuplicate(

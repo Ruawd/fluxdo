@@ -22,6 +22,7 @@ import 'widgets/ai/builtin_presets_factory.dart';
 import 'providers/message_bus_providers.dart';
 import 'providers/chat/chat_notification_alert_provider.dart';
 import 'services/auth_issue_notice_service.dart';
+import 'services/active_site_service.dart';
 import 'providers/app_state_refresher.dart';
 import 'services/highlighter_service.dart';
 import 'widgets/common/notification_icon_button.dart';
@@ -258,9 +259,13 @@ Future<void> main() async {
     InAppWebViewController.setWebContentsDebuggingEnabled(false);
   }
 
+  // 站点必须早于任何网络/Cookie 单例恢复。否则用户上次选择 IDC Flare，
+  // 但 Dio 在并行初始化中仍会先按默认 Linux.do 固化 baseUrl。
+  final prefs = await SharedPreferences.getInstance();
+  await ActiveSiteService.instance.initialize(prefs);
+
   // 阶段 1：并行执行所有不相互依赖的初始化
   final futures = <Future<dynamic>>[
-    SharedPreferences.getInstance(),
     AppConstants.initUserAgent(),
     LogWriter.init(),
     ProxyCertificate.initialize(),
@@ -280,8 +285,7 @@ Future<void> main() async {
     futures.add(windowManager.ensureInitialized());
     futures.add(acrylic.Window.initialize());
   }
-  final results = await Future.wait(futures);
-  final prefs = results[0] as SharedPreferences;
+  await Future.wait(futures);
   await AuthIssueNoticeService.instance.initialize(prefs);
 
   // release 下按设置开关启用性能监控(debug/profile 已在上方无条件启用)
@@ -551,33 +555,99 @@ Future<void> main() async {
 
   Catcher2(
     navigatorKey: navigatorKey,
-    rootWidget: ProviderScope(
-      // 禁用 Riverpod 3 默认的自动重试机制
-      // 默认会对所有失败的异步 provider 指数退避重试 10 次，
-      // 在网络不通时会造成大量无意义的重复请求
+    rootWidget: SiteScopeHost(preferences: prefs),
+    debugConfig: debugConfig,
+    releaseConfig: releaseConfig,
+    profileConfig: releaseConfig,
+    enableLogger: kDebugMode,
+  );
+}
+
+/// 站点切换边界。
+///
+/// 每个社区拥有独立的 Riverpod 容器。切换时销毁旧容器可以一次性终止列表、
+/// 通知、聊天等 provider 的订阅与缓存，避免逐个 invalidate 漏项或串站。
+class SiteScopeHost extends StatefulWidget {
+  const SiteScopeHost({super.key, required this.preferences});
+
+  final SharedPreferences preferences;
+
+  @override
+  State<SiteScopeHost> createState() => _SiteScopeHostState();
+}
+
+class _SiteScopeHostState extends State<SiteScopeHost> {
+  bool _detachingOldSite = false;
+
+  @override
+  void initState() {
+    super.initState();
+    ActiveSiteService.instance.activeSiteNotifier.addListener(_onSiteChanged);
+    ActiveSiteService.instance.transitionNotifier.addListener(
+      _onTransitionChanged,
+    );
+  }
+
+  @override
+  void dispose() {
+    ActiveSiteService.instance.activeSiteNotifier.removeListener(
+      _onSiteChanged,
+    );
+    ActiveSiteService.instance.transitionNotifier.removeListener(
+      _onTransitionChanged,
+    );
+    super.dispose();
+  }
+
+  void _onSiteChanged() {
+    if (!mounted ||
+        _detachingOldSite ||
+        ActiveSiteService.instance.transitionNotifier.value) {
+      return;
+    }
+
+    // MaterialApp 使用全局 navigatorKey。若在同一帧直接换 ProviderScope，
+    // Flutter 会按 GlobalKey 把旧 Navigator（连同旧路由和 MainPage State）
+    // 搬到新站点，而不是销毁它。先空一帧让旧 Navigator 完整卸载，下一帧
+    // 再挂目标站点，确保手工 Riverpod 订阅和页面栈都不会串站。
+    setState(() => _detachingOldSite = true);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      setState(() => _detachingOldSite = false);
+    });
+  }
+
+  void _onTransitionChanged() {
+    if (!mounted) return;
+    setState(() {});
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_detachingOldSite ||
+        ActiveSiteService.instance.transitionNotifier.value) {
+      return const SizedBox.expand();
+    }
+    final site = ActiveSiteService.instance.current;
+    return ProviderScope(
+      key: ValueKey('site-scope-${site.id}'),
+      // 禁用 Riverpod 3 默认的自动重试机制。网络不通时自动重试会在两个
+      // 社区之间切换时放大旧请求残留。
       retry: (_, _) => null,
       overrides: [
-        sharedPreferencesProvider.overrideWithValue(prefs),
-        aiSharedPreferencesProvider.overrideWithValue(prefs),
+        sharedPreferencesProvider.overrideWithValue(widget.preferences),
+        aiSharedPreferencesProvider.overrideWithValue(widget.preferences),
         aiDioAdapterFactoryProvider.overrideWithValue(
           createExternalHttpAdapter,
         ),
-        // 内置 PromptPreset 列表：在 override 函数内 watch localeProvider，
-        // locale 切换时整个 builtInPresetsProvider 重建 → 下游
-        // promptPresetListProvider 的 StateNotifier 重新构造 → preset i18n
-        // 文本随之刷新。
         builtInPresetsProvider.overrideWith((ref) {
           ref.watch(localeProvider);
           return BuiltInPresetsFactory.create();
         }),
       ],
       child: const MainApp(),
-    ),
-    debugConfig: debugConfig,
-    releaseConfig: releaseConfig,
-    profileConfig: releaseConfig,
-    enableLogger: kDebugMode,
-  );
+    );
+  }
 }
 
 /// 只给 textTheme/primaryTextTheme 注入中文 fallback，保留 ThemeData 原本的
@@ -780,7 +850,7 @@ class MainApp extends ConsumerWidget {
                 JankNavObserver(),
                 EscFallbackObserver(),
               ],
-              title: 'FluxDO',
+              title: 'FluxDO · ${AppConstants.site.displayName}',
               locale: TranslationProvider.of(context).flutterLocale,
               localizationsDelegates: const [
                 GlobalMaterialLocalizations.delegate,
@@ -1036,10 +1106,9 @@ class _MainPageState extends ConsumerState<MainPage>
             (_, _) {},
           );
           _chatAlertChannelSub?.close();
-          _chatAlertChannelSub = ref.listenManual<void>(
-            chatNotificationAlertProvider,
-            (_, _) {},
-          );
+          _chatAlertChannelSub = AppConstants.site.supportsChat
+              ? ref.listenManual<void>(chatNotificationAlertProvider, (_, _) {})
+              : null;
         });
       } else if (user == null) {
         _messageBusInitialized = false;
@@ -1333,6 +1402,7 @@ class _MainPageState extends ConsumerState<MainPage>
         onAction: () {
           final topic = DiscourseUrlParser.parseTopic(candidate.uri.toString());
           if (topic != null &&
+              AppConstants.site.matchesHost(candidate.uri.host) &&
               MasterDetailLayout.canShowBothPanesFor(context)) {
             ref
                 .read(selectedTopicProvider.notifier)
@@ -1536,74 +1606,74 @@ class _MainPageState extends ConsumerState<MainPage>
       valueListenable: NotificationQuickPanel.visible,
       builder: (context, notificationPanelVisible, _) =>
           ValueListenableBuilder<bool>(
-        // 平行视界投影态(窄屏详情全宽盖在 tab 体内)开着时返回由
-        // PaneProjectionBackScope 消费,根层完全让位:不弹退出 toast。
-        valueListenable: PaneProjectionBackScope.hasActiveProjection,
-        builder: (context, paneProjectionOpen, _) => PopScope(
-          canPop:
-              routeCanPopInternally ||
-              (!notificationPanelVisible &&
-                  !paneProjectionOpen &&
-                  !requireDoubleBackToExit),
-          onPopInvokedWithResult: (bool didPop, dynamic result) {
-            if (didPop) return;
-            // 分类侧栏通过 LocalHistoryEntry 消费返回；这里保留兜底，覆盖
-            // 抽屉正在收尾动画等 LocalHistory 尚未同步的短暂状态。
-            if (CategoryDrawerHost.isOpen) {
-              CategoryDrawerHost.close();
-              return;
-            }
-            if (NotificationQuickPanel.isVisible) {
-              NotificationQuickPanel.dismiss();
-              return;
-            }
-            // 投影态:PaneProjectionBackScope 的 PopEntry 自己消费本次
-            // 返回(关投影层),根层不做双击退出。
-            if (PaneProjectionBackScope.hasActiveProjection.value) {
-              return;
-            }
-            if (requireDoubleBackToExit) {
-              if (_backExitGuard.shouldExit()) {
-                SystemNavigator.pop();
-              } else {
-                ToastService.showInfo(S.current.toast_pressAgainToExit);
-              }
-            }
-          },
-          child: AdaptiveScaffold(
-            selectedIndex: selectedBottomIndex,
-            onDestinationSelected: _onDestinationSelected,
-            destinations: destinations,
-            railBottomLeading: (user != null && !hasNotificationEntry)
-                ? const NotificationIconButton()
-                : null,
-            hideNavigationRail: hideNavigationRail,
-            // 投影态底栏隐藏:详情全宽盖在 tab 体内,底栏还留着会像
-            // "详情页悬在 tab 骨架上";合成路由时代盖住一切,投影态
-            // 用显式谓词达成同样观感。
-            hideBottomNavigation: paneProjectionOpen,
-            body: IndexedStack(
-              index: safePageIndex,
-              children: [
-                for (int i = 0; i < pageEntries.length; i++)
-                  KeyedSubtree(
-                    key: ValueKey('nav-entry-${pageEntries[i].id}'),
-                    child: TickerMode(
-                      enabled: safePageIndex == i,
-                      child: ExcludeFocus(
-                        excluding: safePageIndex != i,
-                        child: pageEntries[i].pageBuilder!(
-                          context,
-                          safePageIndex == i,
+            // 平行视界投影态(窄屏详情全宽盖在 tab 体内)开着时返回由
+            // PaneProjectionBackScope 消费,根层完全让位:不弹退出 toast。
+            valueListenable: PaneProjectionBackScope.hasActiveProjection,
+            builder: (context, paneProjectionOpen, _) => PopScope(
+              canPop:
+                  routeCanPopInternally ||
+                  (!notificationPanelVisible &&
+                      !paneProjectionOpen &&
+                      !requireDoubleBackToExit),
+              onPopInvokedWithResult: (bool didPop, dynamic result) {
+                if (didPop) return;
+                // 分类侧栏通过 LocalHistoryEntry 消费返回；这里保留兜底，覆盖
+                // 抽屉正在收尾动画等 LocalHistory 尚未同步的短暂状态。
+                if (CategoryDrawerHost.isOpen) {
+                  CategoryDrawerHost.close();
+                  return;
+                }
+                if (NotificationQuickPanel.isVisible) {
+                  NotificationQuickPanel.dismiss();
+                  return;
+                }
+                // 投影态:PaneProjectionBackScope 的 PopEntry 自己消费本次
+                // 返回(关投影层),根层不做双击退出。
+                if (PaneProjectionBackScope.hasActiveProjection.value) {
+                  return;
+                }
+                if (requireDoubleBackToExit) {
+                  if (_backExitGuard.shouldExit()) {
+                    SystemNavigator.pop();
+                  } else {
+                    ToastService.showInfo(S.current.toast_pressAgainToExit);
+                  }
+                }
+              },
+              child: AdaptiveScaffold(
+                selectedIndex: selectedBottomIndex,
+                onDestinationSelected: _onDestinationSelected,
+                destinations: destinations,
+                railBottomLeading: (user != null && !hasNotificationEntry)
+                    ? const NotificationIconButton()
+                    : null,
+                hideNavigationRail: hideNavigationRail,
+                // 投影态底栏隐藏:详情全宽盖在 tab 体内,底栏还留着会像
+                // "详情页悬在 tab 骨架上";合成路由时代盖住一切,投影态
+                // 用显式谓词达成同样观感。
+                hideBottomNavigation: paneProjectionOpen,
+                body: IndexedStack(
+                  index: safePageIndex,
+                  children: [
+                    for (int i = 0; i < pageEntries.length; i++)
+                      KeyedSubtree(
+                        key: ValueKey('nav-entry-${pageEntries[i].id}'),
+                        child: TickerMode(
+                          enabled: safePageIndex == i,
+                          child: ExcludeFocus(
+                            excluding: safePageIndex != i,
+                            child: pageEntries[i].pageBuilder!(
+                              context,
+                              safePageIndex == i,
+                            ),
+                          ),
                         ),
                       ),
-                    ),
-                  ),
-              ],
+                  ],
+                ),
+              ),
             ),
           ),
-        ),
-      ),
     );
 
     // 桌面端需要 Focus 以接收全局快捷键

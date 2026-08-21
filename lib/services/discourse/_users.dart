@@ -21,18 +21,15 @@ mixin _UsersMixin on _DiscourseServiceBase {
   Future<String?> getUsername() async {
     if (_username != null && _username!.isNotEmpty) return _username;
 
-    _username = await _storage.read(key: DiscourseService._usernameKey);
+    _username = await _storage.read(key: _usernameStorageKey);
     if (_username != null && _username!.isNotEmpty) return _username;
 
     try {
-      final preloaded = PreloadedDataService();
+      final preloaded = PreloadedDataService.forSite(_site);
       final currentUser = await preloaded.getCurrentUser();
       if (currentUser != null && currentUser['username'] != null) {
         _username = currentUser['username'] as String;
-        await _storage.write(
-          key: DiscourseService._usernameKey,
-          value: _username!,
-        );
+        await _storage.write(key: _usernameStorageKey, value: _username!);
         return _username;
       }
     } catch (e) {
@@ -80,17 +77,14 @@ mixin _UsersMixin on _DiscourseServiceBase {
   /// 从预加载数据获取当前用户
   Future<User?> getPreloadedCurrentUser() async {
     try {
-      final preloaded = PreloadedDataService();
+      final preloaded = PreloadedDataService.forSite(_site);
       final currentUserData = await preloaded.getCurrentUser();
       if (currentUserData != null) {
         final user = User.fromJson(currentUserData);
         currentUserNotifier.value = user;
         if (user.username.isNotEmpty) {
           _username = user.username;
-          await _storage.write(
-            key: DiscourseService._usernameKey,
-            value: _username!,
-          );
+          await _storage.write(key: _usernameStorageKey, value: _username!);
         }
         return user;
       }
@@ -334,10 +328,7 @@ mixin _UsersMixin on _DiscourseServiceBase {
 
   /// 拉书签接口并返回原始 JSON map，给本地缓存对账层使用——
   /// 需要保留每条书签自身的 updated_at 等字段，无法通过 [TopicListResponse] 转回。
-  Future<Map<String, dynamic>> getUserBookmarksRaw({
-    int page = 0,
-    int? limit,
-  }) {
+  Future<Map<String, dynamic>> getUserBookmarksRaw({int page = 0, int? limit}) {
     return _getUserBookmarksRaw(page: page, limit: limit);
   }
 

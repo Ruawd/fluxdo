@@ -204,7 +204,7 @@ mixin _AuthMixin on _DiscourseServiceBase {
       return;
     }
 
-    final jarTToken = await _cookieJar.getTToken();
+    final jarTToken = await _cookieJar.getTToken(uri: _siteUri);
     final sentTToken = _sentTTokenFromRequest(requestOptions);
     if (_isAlreadyLoggedOutSignal(
       jarTToken: jarTToken,
@@ -349,7 +349,7 @@ mixin _AuthMixin on _DiscourseServiceBase {
       if (recoveredUser.username.isNotEmpty) {
         _username = recoveredUser.username;
         await _storage.write(
-          key: DiscourseService._usernameKey,
+          key: _usernameStorageKey,
           value: recoveredUser.username,
         );
       }
@@ -379,7 +379,7 @@ mixin _AuthMixin on _DiscourseServiceBase {
       debugPrint('[Auth] probe 前 cf_clearance 同步失败: $e');
     }
 
-    final probeJarTToken = await _cookieJar.getTToken();
+    final probeJarTToken = await _cookieJar.getTToken(uri: _siteUri);
     LogWriter.instance.write({
       'timestamp': DateTime.now().toIso8601String(),
       'level': 'info',
@@ -430,12 +430,9 @@ mixin _AuthMixin on _DiscourseServiceBase {
         currentUserNotifier.value = user;
         if (user.username.isNotEmpty) {
           _username = user.username;
-          await _storage.write(
-            key: DiscourseService._usernameKey,
-            value: user.username,
-          );
+          await _storage.write(key: _usernameStorageKey, value: user.username);
         }
-        final liveToken = await _cookieJar.getTToken();
+        final liveToken = await _cookieJar.getTToken(uri: _siteUri);
         if (liveToken != null && liveToken.isNotEmpty) {
           _tToken = liveToken;
         }
@@ -466,7 +463,7 @@ mixin _AuthMixin on _DiscourseServiceBase {
         if (recoveredByPrevious.username.isNotEmpty) {
           _username = recoveredByPrevious.username;
           await _storage.write(
-            key: DiscourseService._usernameKey,
+            key: _usernameStorageKey,
             value: recoveredByPrevious.username,
           );
         }
@@ -495,7 +492,7 @@ mixin _AuthMixin on _DiscourseServiceBase {
         if (healedUser.username.isNotEmpty) {
           _username = healedUser.username;
           await _storage.write(
-            key: DiscourseService._usernameKey,
+            key: _usernameStorageKey,
             value: healedUser.username,
           );
         }
@@ -535,7 +532,7 @@ mixin _AuthMixin on _DiscourseServiceBase {
           if (recoveredByPrevious.username.isNotEmpty) {
             _username = recoveredByPrevious.username;
             await _storage.write(
-              key: DiscourseService._usernameKey,
+              key: _usernameStorageKey,
               value: recoveredByPrevious.username,
             );
           }
@@ -565,7 +562,7 @@ mixin _AuthMixin on _DiscourseServiceBase {
           if (healedUser404.username.isNotEmpty) {
             _username = healedUser404.username;
             await _storage.write(
-              key: DiscourseService._usernameKey,
+              key: _usernameStorageKey,
               value: healedUser404.username,
             );
           }
@@ -650,12 +647,12 @@ mixin _AuthMixin on _DiscourseServiceBase {
       return null;
     }
 
-    final beforeJarTToken = await _cookieJar.getTToken();
+    final beforeJarTToken = await _cookieJar.getTToken(uri: _siteUri);
     String? candidateTToken;
     try {
       candidateTToken = await BoundarySyncService.instance
           .readCookieValueFromWebView(
-            currentUrl: AppConstants.baseUrl,
+            currentUrl: _siteUri.origin,
             name: '_t',
             allowLowConfidenceSessionCookies: true,
           );
@@ -675,7 +672,7 @@ mixin _AuthMixin on _DiscourseServiceBase {
     try {
       candidateForumSession = await BoundarySyncService.instance
           .readCookieValueFromWebView(
-            currentUrl: AppConstants.baseUrl,
+            currentUrl: _siteUri.origin,
             name: '_forum_session',
             allowLowConfidenceSessionCookies: true,
           );
@@ -705,7 +702,7 @@ mixin _AuthMixin on _DiscourseServiceBase {
 
     try {
       await BoundarySyncService.instance.syncFromWebView(
-        currentUrl: AppConstants.baseUrl,
+        currentUrl: _siteUri.origin,
         cookieNames: candidateSessionCookies.keys.toSet(),
         acceptValues: candidateSessionCookies,
         requestGeneration: requestGeneration,
@@ -715,7 +712,7 @@ mixin _AuthMixin on _DiscourseServiceBase {
       return null;
     }
 
-    final afterJarTToken = await _cookieJar.getTToken();
+    final afterJarTToken = await _cookieJar.getTToken(uri: _siteUri);
     if (!_hasTokenValue(afterJarTToken) || afterJarTToken != candidateTToken) {
       return null;
     }
@@ -785,10 +782,11 @@ mixin _AuthMixin on _DiscourseServiceBase {
     await _cookieJar.setCookie(
       '_t',
       candidateTTokenValue,
+      url: _siteUri.origin,
       httpOnly: true,
       trusted: true,
     );
-    final afterJarTToken = await _cookieJar.getTToken();
+    final afterJarTToken = await _cookieJar.getTToken(uri: _siteUri);
     if (!_hasTokenValue(afterJarTToken) ||
         afterJarTToken != candidateTTokenValue) {
       return null;
@@ -824,10 +822,12 @@ mixin _AuthMixin on _DiscourseServiceBase {
     String? triggerInfo,
   }) async {
     try {
-      final currentUserJson = await UserApiKeyService().selfHeal(_dio);
+      final currentUserJson = await UserApiKeyService.forSite(
+        _site,
+      ).selfHeal(_dio);
       if (currentUserJson == null) return null;
 
-      final newToken = await _cookieJar.getTToken();
+      final newToken = await _cookieJar.getTToken(uri: _siteUri);
       if (!_hasTokenValue(newToken)) return null;
 
       _tToken = newToken;
@@ -970,9 +970,9 @@ mixin _AuthMixin on _DiscourseServiceBase {
               // 服务端用 _t 已经能完成认证，首个请求漏掉 _rt 不会被拒。
               // 后台触发，不阻塞业务请求，避免冷启动后第一次点话题被
               // bootstrap (Mac 上 6~20s) 整段拖住。
-              WebViewSessionCookieRefreshService.instance.ensureInBackground(
-                reason: 'dio_request:${options.method}',
-              );
+              WebViewSessionCookieRefreshService.forSite(
+                _site,
+              ).ensureInBackground(reason: 'dio_request:${options.method}');
             }
             options.headers['Discourse-Logged-In'] = 'true';
             if (UserPresenceService().isPresent) {
@@ -1031,7 +1031,7 @@ mixin _AuthMixin on _DiscourseServiceBase {
               username.isNotEmpty &&
               username != _username) {
             _username = username;
-            _storage.write(key: DiscourseService._usernameKey, value: username);
+            _storage.write(key: _usernameStorageKey, value: username);
           }
 
           debugPrint(
@@ -1157,8 +1157,11 @@ mixin _AuthMixin on _DiscourseServiceBase {
   }
 
   Future<SessionSnapshot> _readSessionCookieState() async {
-    final tToken = await _cookieJar.getTToken();
-    final forumSession = await _cookieJar.getCookieValue('_forum_session');
+    final tToken = await _cookieJar.getTToken(uri: _siteUri);
+    final forumSession = await _cookieJar.getCookieValue(
+      '_forum_session',
+      uri: _siteUri,
+    );
 
     return SessionSnapshot.fromValues(
       tToken: tToken,
@@ -1223,7 +1226,10 @@ mixin _AuthMixin on _DiscourseServiceBase {
   ) async {
     final tTokenFromResponse = _extractTTokenFromSetCookie(response);
     if (tTokenFromResponse != null || _hasExplicitTDeletion(response)) {
-      final forumSession = await _cookieJar.getCookieValue('_forum_session');
+      final forumSession = await _cookieJar.getCookieValue(
+        '_forum_session',
+        uri: _siteUri,
+      );
       return SessionSnapshot.fromValues(
         tToken: tTokenFromResponse,
         forumSession: forumSession,
@@ -1325,7 +1331,7 @@ mixin _AuthMixin on _DiscourseServiceBase {
 
     debugPrint('[Auth] discourse-logged-out: $triggerInfo');
 
-    final jarTToken = await _cookieJar.getTToken();
+    final jarTToken = await _cookieJar.getTToken(uri: _siteUri);
     final sentCookieHeader =
         requestOptions.headers[HttpHeaders.cookieHeader]?.toString() ??
         requestOptions.headers['Cookie']?.toString() ??
@@ -1387,7 +1393,9 @@ mixin _AuthMixin on _DiscourseServiceBase {
     // 成功则本次失效对用户完全透明，不登出不打扰。
     // selfHeal 内部有单飞合流与失败冷却窗口，不会形成恢复风暴。
     try {
-      final restoredUser = await UserApiKeyService().selfHeal(_dio);
+      final restoredUser = await UserApiKeyService.forSite(
+        _site,
+      ).selfHeal(_dio);
       final restoredUsername = restoredUser?['username']?.toString();
       if (restoredUsername != null && restoredUsername.isNotEmpty) {
         await finalizeNativeLoginSuccess(restoredUsername);
@@ -1413,12 +1421,10 @@ mixin _AuthMixin on _DiscourseServiceBase {
     AuthSession().advance();
 
     // 收集 _t cookie 诊断信息（不含实际值，仅状态）
-    final jarTToken = await _cookieJar.getTToken();
+    final jarTToken = await _cookieJar.getTToken(uri: _siteUri);
     final csrfToken = _cookieSync.csrfToken;
     final jarSessionCookies = await _cookieJar
-        .getSessionCookieDiagnosticsForRequest(
-          uri: Uri.parse(AppConstants.baseUrl),
-        );
+        .getSessionCookieDiagnosticsForRequest(uri: _siteUri);
 
     // 记录被动退出日志（含触发来源，方便排查）
     LogWriter.instance.write({
@@ -1456,10 +1462,10 @@ mixin _AuthMixin on _DiscourseServiceBase {
   /// 避免本地有 cookie 但服务端已撤销 session 的"假在线"状态。
   /// 网络异常时保守返回 true（保留本地状态）。
   Future<bool> isLoggedIn() async {
-    final tToken = await _cookieJar.getTToken();
+    final tToken = await _cookieJar.getTToken(uri: _siteUri);
     if (tToken == null || tToken.isEmpty) return false;
 
-    final username = await _storage.read(key: DiscourseService._usernameKey);
+    final username = await _storage.read(key: _usernameStorageKey);
     if (username == null || username.isEmpty) return false;
 
     // 服务端验证
@@ -1548,7 +1554,7 @@ mixin _AuthMixin on _DiscourseServiceBase {
     _tToken = tToken;
     _credentialsLoaded = false;
     AuthIssueNoticeService.instance.clearSessionCookieRepairHint();
-    WebViewSessionCookieRefreshService.instance.ensureInBackground(
+    WebViewSessionCookieRefreshService.forSite(_site).ensureInBackground(
       reason: 'login_success',
       force: forceBrowserSessionSync,
     );
@@ -1558,7 +1564,7 @@ mixin _AuthMixin on _DiscourseServiceBase {
   /// 保存用户名
   Future<void> saveUsername(String username) async {
     _username = username;
-    await _storage.write(key: DiscourseService._usernameKey, value: username);
+    await _storage.write(key: _usernameStorageKey, value: username);
   }
 
   /// 登出
@@ -1568,16 +1574,16 @@ mixin _AuthMixin on _DiscourseServiceBase {
 
     // ===== 第二步：主动停止后台 Service =====
     MessageBusService().stopAll();
-    unawaited(CfClearanceRefreshService().stop());
+    unawaited(CfClearanceRefreshService.forSite(_site).stop());
     WebViewAdapterSettingsService.instance.resetSessionFallback();
-    CfChallengeService().resetSessionCompatibilityDecision();
+    CfChallengeService.forSite(_site).resetSessionCompatibilityDecision();
 
     // ===== 第三步：调用登出 API（可选，用新的 generation） =====
     if (callApi) {
       // 显式登出:自愈凭证一并撤销,防止之后被自愈机制"复活"会话
-      await UserApiKeyService().revokeAndClear(_dio);
+      await UserApiKeyService.forSite(_site).revokeAndClear(_dio);
       final usernameForLogout =
-          _username ?? await _storage.read(key: DiscourseService._usernameKey);
+          _username ?? await _storage.read(key: _usernameStorageKey);
       try {
         if (usernameForLogout != null && usernameForLogout.isNotEmpty) {
           await _dio.delete('/session/$usernameForLogout');
@@ -1594,24 +1600,26 @@ mixin _AuthMixin on _DiscourseServiceBase {
     _cachedUserSummary = null;
     _cachedUserSummaryUsername = null;
     _userSummaryCacheTime = null;
-    await _storage.delete(key: DiscourseService._usernameKey);
+    await _storage.delete(key: _usernameStorageKey);
     _credentialsLoaded = false;
     // bootstrap 成功态是「进程 × 登录会话」级(浏览器语义:每页面加载一次),
     // 换账号 = 新浏览器会话,这里复位让下一个会话重新跑一次。
-    WebViewSessionCookieRefreshService.instance.resetSessionState();
+    WebViewSessionCookieRefreshService.forSite(_site).resetSessionState();
 
     // ===== 第五步：清除 Cookie（保留 cf_clearance）=====
     await _cookieSync.reset();
-    final cfClearanceCookie = await _cookieJar.getCfClearanceCookie();
-    await _cookieJar.clearAll();
+    final cfClearanceCookie = await _cookieJar.getCfClearanceCookie(
+      uri: _siteUri,
+    );
+    await _cookieJar.clearCurrentSite(siteUri: _siteUri);
     if (cfClearanceCookie != null) {
-      await _cookieJar.restoreCfClearance(cfClearanceCookie);
+      await _cookieJar.restoreCfClearance(cfClearanceCookie, uri: _siteUri);
     }
 
     // ===== 第六步：刷新预加载数据（确保新状态就绪后再广播）=====
-    PreloadedDataService().reset();
+    PreloadedDataService.forSite(_site).reset();
     if (refreshPreload) {
-      await PreloadedDataService().refresh();
+      await PreloadedDataService.forSite(_site).refresh();
     }
 
     // ===== 第七步：广播状态变更（此时一切已就绪）=====

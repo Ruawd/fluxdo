@@ -7,6 +7,7 @@ import '../pages/bookmarks/bookmarks_models.dart';
 import '../storage/bookmark_cache_dao.dart';
 import '../utils/paged_async_notifier.dart';
 import '../utils/pagination_helper.dart';
+import '../services/active_site_service.dart';
 import 'bookmark_sync_controller.dart';
 import 'bookmarks_repository.dart';
 import 'core_providers.dart';
@@ -16,9 +17,12 @@ final bookmarksPageLoaderProvider = Provider<BookmarkPageLoader>((ref) {
   return (page, limit) => service.getUserBookmarks(page: page, limit: limit);
 });
 
-/// 当前账号 username，作为本地书签缓存的隔离键；抽出来便于测试注入。
+/// 当前站点 + username 组成的本地账号隔离键；抽出来便于测试注入。
 final currentUsernameProvider = FutureProvider<String?>((ref) async {
-  return ref.read(discourseServiceProvider).getUsername();
+  final site = ActiveSiteService.instance.current;
+  final username = await ref.read(discourseServiceProvider).getUsername();
+  if (username == null || username.isEmpty) return null;
+  return site.scopedAccountId(username);
 });
 
 /// 删除书签后的本地缓存写穿透(全入口统一收口):
@@ -235,10 +239,7 @@ class BookmarksNotifier extends AsyncNotifier<List<Topic>> {
       final records = await _repo.readByIds(accountId, ids);
       if (!ref.mounted) return;
       final current = state.value ?? const <Topic>[];
-      final merged = <Topic>[
-        ...current,
-        ...records.map((r) => r.topic),
-      ];
+      final merged = <Topic>[...current, ...records.map((r) => r.topic)];
       _loadedCount = merged.length;
       state = AsyncValue.data(List<Topic>.unmodifiable(merged));
     } catch (_) {

@@ -2,7 +2,8 @@ import 'dart:async';
 import 'dart:typed_data';
 import 'package:dio/dio.dart' as dio;
 import 'package:http/http.dart' as http;
-import '../constants.dart';
+import '../config/discourse_site.dart';
+import 'active_site_service.dart';
 import 'network/discourse_dio.dart';
 import 'network/adapters/webview_http_adapter.dart';
 
@@ -19,18 +20,21 @@ import 'network/adapters/webview_http_adapter.dart';
 ///   图都触发 cookie jar 磁盘读写,30 张同屏 = 60 次磁盘 IO + cookie jar 锁
 ///   争用,这是"PNG 等半天"的根因。
 class DioHttpClient extends http.BaseClient {
-  static DioHttpClient? _instance;
+  static final Map<String, DioHttpClient> _instances = {};
 
   final dio.Dio _mainDomainDio;
   final dio.Dio _cdnDio;
+  final String _mainHost;
 
   factory DioHttpClient() {
-    _instance ??= DioHttpClient._internal();
-    return _instance!;
+    final site = ActiveSiteService.instance.current;
+    return _instances.putIfAbsent(site.id, () => DioHttpClient._internal(site));
   }
 
-  DioHttpClient._internal()
-    : _mainDomainDio = DiscourseDio.create(
+  DioHttpClient._internal(DiscourseSite site)
+    : _mainHost = site.host,
+      _mainDomainDio = DiscourseDio.create(
+        baseUrl: site.baseUrl,
         defaultHeaders: _imageHeaders,
         maxConcurrent: null,
         enableCookies: true, // 主域需要 cookie 走 secure-uploads
@@ -39,6 +43,7 @@ class DioHttpClient extends http.BaseClient {
         enableNetworkLog: false, // 几百张图都 log 占主线程
       ),
       _cdnDio = DiscourseDio.create(
+        baseUrl: site.baseUrl,
         defaultHeaders: _imageHeaders,
         maxConcurrent: null,
         enableCookies: false, // CDN 完全不需要 cookie
@@ -75,10 +80,10 @@ class DioHttpClient extends http.BaseClient {
   static _Semaphore get _downloadSemaphore => _contentSemaphore;
 
   static _Semaphore _semaphoreOf(DownloadChannel channel) => switch (channel) {
-        DownloadChannel.small => _smallSemaphore,
-        DownloadChannel.content => _contentSemaphore,
-        DownloadChannel.sticker => _stickerSemaphore,
-      };
+    DownloadChannel.small => _smallSemaphore,
+    DownloadChannel.content => _contentSemaphore,
+    DownloadChannel.sticker => _stickerSemaphore,
+  };
 
   /// 把仍在 [channel] 等待队列中的 [url] 提到高优先级(滚入视野)。
   /// 在途/未排队/已完成均为无操作 —— 幂等,调用方无需判断状态。
@@ -89,11 +94,9 @@ class DioHttpClient extends http.BaseClient {
   static void sinkPending(DownloadChannel channel, String url) =>
       _semaphoreOf(channel).sink(url);
 
-  /// 提取 [AppConstants.baseUrl] 的 host(例如 `linux.do`),用于判断主域。
+  /// 创建实例时固定社区主 host（例如 `linux.do`），用于判断主域。
   /// 注意是 host 比对而不是 URL prefix 比对 —— 子域(`auth.linux.do` 等)
   /// 也算主域,会走带 cookie 的 dio。
-  static final String _mainHost = Uri.parse(AppConstants.baseUrl).host;
-
   bool _isMainDomain(Uri url) {
     final host = url.host;
     if (host.isEmpty) return false;
@@ -225,16 +228,14 @@ class DioHttpClient extends http.BaseClient {
         ),
       );
       if (response.statusCode != 200) {
-        throw http.ClientException(
-          'HTTP ${response.statusCode} for $url',
-          url,
-        );
+        throw http.ClientException('HTTP ${response.statusCode} for $url', url);
       }
       final contentLength = int.tryParse(
         response.headers.value('content-length') ?? '',
       );
-      final total =
-          (contentLength != null && contentLength > 0) ? contentLength : null;
+      final total = (contentLength != null && contentLength > 0)
+          ? contentLength
+          : null;
 
       final builder = BytesBuilder(copy: false);
       final body = response.data;

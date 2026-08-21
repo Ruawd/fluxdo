@@ -3,6 +3,7 @@ import 'package:app_icons/app_icons.dart';
 import 'package:jovial_svg/jovial_svg.dart';
 import '../../services/discourse_cache_manager.dart';
 import '../../utils/svg_utils.dart';
+import '../../constants.dart';
 
 /// 智能头像组件
 ///
@@ -46,6 +47,7 @@ final RegExp _avatarUsernamePattern = RegExp(r'/user_avatar/[^/]+/([^/]+)/');
 const Set<String> _squareAvatarUsernames = {'neo'};
 
 bool isSquareAvatarUrl(String? url) {
+  if (!AppConstants.site.supportsLinuxDoEcosystem) return false;
   if (url == null || url.isEmpty) return false;
   final username = _avatarUsernamePattern
       .firstMatch(url)

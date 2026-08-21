@@ -180,21 +180,24 @@ mixin _LoginMixin on _DiscourseServiceBase, _AuthMixin {
   Future<void> finalizeNativeLoginSuccess(String identifier) async {
     AuthSession().advance();
 
-    final token = await _cookieJar.getTToken() ?? '';
+    final token = await _cookieJar.getTToken(uri: _siteUri) ?? '';
     if (token.isEmpty) {
       debugPrint('[DiscourseLogin] 警告: 登录成功但 jar 没拿到 _t');
     }
 
     await saveUsername(identifier);
     if (token.isNotEmpty) setToken(token);
-    final forceBrowserSessionSync = !WebViewSessionCookieRefreshService.instance
-        .hasFreshSyncForToken(token);
+    final forceBrowserSessionSync = !WebViewSessionCookieRefreshService.forSite(
+      _site,
+    ).hasFreshSyncForToken(token);
 
     var loginReadyNotified = false;
     try {
       await LoginReadyCoordinator(
-            hydrateFromHtml: PreloadedDataService().hydrateFromHtml,
-            refreshPreloadedData: PreloadedDataService().refresh,
+            hydrateFromHtml: PreloadedDataService.forSite(
+              _site,
+            ).hydrateFromHtml,
+            refreshPreloadedData: PreloadedDataService.forSite(_site).refresh,
             notifyLoginReady: (t) {
               loginReadyNotified = true;
               onLoginSuccess(

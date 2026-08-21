@@ -58,6 +58,8 @@
   "login_qrShowCode": "显示登录二维码",
   "login_qrSuccess": "扫码登录成功",
   "login_scanToLogin": "扫码登录",
+  "login_continueWithLinuxDo": "使用 Linux.do 登录",
+  "login_siteExternalOnly": "IDC Flare 使用 Linux.do 账号授权登录，登录过程将在内置浏览器中完成。",
   "login_slogan": "真诚、友善、团结、专业",
   "migration_cookieUpgrade": "正在升级 Cookie 存储...",
   "migration_reloginRequired": "本次版本升级优化了 Cookie 存储机制，已清除旧的登录状态。请重新登录。",

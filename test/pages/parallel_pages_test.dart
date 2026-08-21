@@ -29,6 +29,10 @@ void main() {
       normalizeDirectSearchLink('www.linux.do/u/alice'),
       'https://www.linux.do/u/alice',
     );
+    expect(
+      normalizeDirectSearchLink('idcflare.com/t/topic/456'),
+      'https://idcflare.com/t/topic/456',
+    );
     expect(normalizeDirectSearchLink('/t/123'), '/t/123');
     expect(normalizeDirectSearchLink('普通关键词'), '普通关键词');
   });

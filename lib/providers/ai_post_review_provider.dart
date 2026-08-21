@@ -3,6 +3,7 @@ import 'package:collection/collection.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../services/ai_post_review_service.dart';
+import '../constants.dart';
 import 'core_providers.dart';
 import 'preferences_provider.dart';
 import 'theme_provider.dart';
@@ -60,5 +61,6 @@ final aiPostReviewServiceProvider = Provider<AiPostReviewService>((ref) {
     chatService: chatService,
     dio: discourseService.dio,
     apiKeyLoader: AiProviderListNotifier.getApiKey,
+    site: AppConstants.site,
   );
 });

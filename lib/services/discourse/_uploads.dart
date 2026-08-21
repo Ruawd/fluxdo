@@ -530,7 +530,7 @@ mixin _UploadsMixin on _DiscourseServiceBase {
     if (resolved == null || resolved.isMissing) return null;
 
     final secureUploads =
-        PreloadedDataService().siteSettingsSync?['secure_uploads'] == true;
+        PreloadedDataService.forSite(_site).siteSettingsSync?['secure_uploads'] == true;
     return resolved.linkUrl(secureUploads: secureUploads);
   }
 }

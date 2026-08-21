@@ -51,6 +51,8 @@
   "login_qrShowCode": "顯示登錄二維碼",
   "login_qrSuccess": "掃碼登錄成功",
   "login_scanToLogin": "掃碼登錄",
+  "login_continueWithLinuxDo": "使用 Linux.do 登錄",
+  "login_siteExternalOnly": "IDC Flare 使用 Linux.do 帳戶授權登錄，登錄過程將在內置瀏覽器中完成。",
   "login_slogan": "真誠、友善、團結、專業",
   "migration_cookieUpgrade": "正在升級 Cookie 儲存...",
   "migration_reloginRequired": "本次版本升級優化了 Cookie 儲存機制，已清除舊的登入狀態。請重新登入。",

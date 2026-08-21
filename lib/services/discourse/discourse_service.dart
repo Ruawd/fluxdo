@@ -28,6 +28,7 @@ import '../../models/chat/chat_channel.dart';
 import '../../models/chat/chat_message.dart';
 
 import '../../constants.dart';
+import '../../config/discourse_site.dart';
 import '../../providers/message_bus_providers.dart';
 import '../auth_session.dart';
 import '../auth_issue_notice_service.dart';
@@ -52,6 +53,7 @@ import '../network/exceptions/api_exception.dart';
 import '../storage/resilient_secure_storage.dart';
 import '../user_api_key_service.dart';
 import '../user_presence_service.dart';
+import '../active_site_service.dart';
 import '../../l10n/s.dart';
 import '../../utils/url_helper.dart';
 
@@ -84,6 +86,9 @@ abstract class _DiscourseServiceBase {
   CsrfTokenService get _cookieSync;
   CookieJarService get _cookieJar;
   CfChallengeService get _cfChallenge;
+  String get _usernameStorageKey;
+  DiscourseSite get _site;
+  Uri get _siteUri;
 
   String? get _tToken;
   set _tToken(String? value);
@@ -119,7 +124,7 @@ abstract class _DiscourseServiceBase {
   Future<void> finalizeNativeLoginSuccess(String identifier);
 }
 
-/// Linux.do API 服务
+/// 当前 Discourse 社区的 API 服务。
 class DiscourseService extends _DiscourseServiceBase
     with
         _AuthMixin,
@@ -143,8 +148,7 @@ class DiscourseService extends _DiscourseServiceBase
         _ReviewablesMixin,
         _AssignMixin,
         _ChatMixin {
-  static const String baseUrl = AppConstants.baseUrl;
-  static const String _usernameKey = 'linux_do_username';
+  static String get baseUrl => AppConstants.baseUrl;
   static const _summaryCacheDuration = Duration(minutes: 5);
 
   @override
@@ -152,11 +156,17 @@ class DiscourseService extends _DiscourseServiceBase
   @override
   final ResilientSecureStorage _storage;
   @override
-  final CsrfTokenService _cookieSync = CsrfTokenService();
+  final CsrfTokenService _cookieSync;
   @override
   final CookieJarService _cookieJar = CookieJarService();
   @override
-  final CfChallengeService _cfChallenge = CfChallengeService();
+  final CfChallengeService _cfChallenge;
+  @override
+  final String _usernameStorageKey;
+  @override
+  final DiscourseSite _site;
+  @override
+  final Uri _siteUri;
 
   @override
   String? _tToken;
@@ -196,18 +206,53 @@ class DiscourseService extends _DiscourseServiceBase
   @override
   final Map<String, ResolvedUploadUrl> _urlCache = {};
 
-  static final DiscourseService _instance = DiscourseService._internal();
-  factory DiscourseService() => _instance;
+  static final Map<String, DiscourseService> _instances = {};
+  factory DiscourseService() {
+    return forSite(ActiveSiteService.instance.current);
+  }
+
+  static DiscourseService forSite(DiscourseSite site) {
+    return _instances.putIfAbsent(
+      site.id,
+      () => DiscourseService._internal(site),
+    );
+  }
 
   CsrfTokenService get cookieSync => _cookieSync;
 
   Dio get dio => _dio;
+  DiscourseSite get site => _site;
+
+  /// 重新激活这个站点实例。Cookie/安全存储按站点隔离，因此只需丢弃内存
+  /// 快照并从目标域重新恢复，不会注销另一个社区账号。
+  Future<void> activateForSiteSwitch() async {
+    _resetStrikes();
+    _clearPreviousTTokenFallback();
+    _tToken = null;
+    _username = null;
+    _credentialsLoaded = false;
+    _cachedUserSummary = null;
+    _cachedUserSummaryUsername = null;
+    _userSummaryCacheTime = null;
+    _activeUserRequests.clear();
+    _activeUserSummaryRequests.clear();
+    _urlCache.clear();
+    currentUserNotifier.value = null;
+    await _loadStoredCredentials();
+    _credentialsLoaded = true;
+  }
 
   @override
   bool get isAuthenticated => _tToken != null && _tToken!.isNotEmpty;
 
-  DiscourseService._internal()
-    : _dio = DiscourseDio.create(
+  DiscourseService._internal(DiscourseSite site)
+    : _site = site,
+      _usernameStorageKey = site.scopedStorageKey('linux_do_username'),
+      _siteUri = site.uri,
+      _cookieSync = CsrfTokenService.forSite(site),
+      _cfChallenge = CfChallengeService.forSite(site),
+      _dio = DiscourseDio.create(
+        baseUrl: site.baseUrl,
         defaultHeaders: {
           'Accept': 'application/json, text/javascript, */*; q=0.01',
           'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
@@ -251,7 +296,7 @@ class DiscourseService extends _DiscourseServiceBase
   /// 加载存储的凭证
   @override
   Future<void> _loadStoredCredentials() async {
-    _tToken = await _cookieJar.getTToken();
-    _username = await _storage.read(key: _usernameKey);
+    _tToken = await _cookieJar.getTToken(uri: _siteUri);
+    _username = await _storage.read(key: _usernameStorageKey);
   }
 }

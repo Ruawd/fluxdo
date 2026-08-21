@@ -94,7 +94,7 @@ mixin _PresenceMixin on _DiscourseServiceBase {
 
   /// 获取预加载的话题追踪频道元数据
   Future<Map<String, dynamic>?> getPreloadedTopicTrackingMeta() async {
-    final preloaded = PreloadedDataService();
+    final preloaded = PreloadedDataService.forSite(_site);
     return preloaded.getTopicTrackingStateMeta();
   }
 }

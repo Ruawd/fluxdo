@@ -30,13 +30,15 @@ import '../cookie/session_cookie_sentinel.dart';
 /// - 永远不会"无声把 401 变成 200"（只有 retry 真拿到 200 才返回 200）
 /// - 永远不循环自愈（[selfHealedExtraKey] 标记保护）
 class SelfHealingInterceptor extends Interceptor {
-  SelfHealingInterceptor({required this.dio});
+  SelfHealingInterceptor({required this.dio})
+    : _baseHost = Uri.parse(dio.options.baseUrl).host.toLowerCase();
 
   /// 用于重试的 Dio 实例。
   ///
   /// 通常传入本身所在的 Dio。retry 时通过 [selfHealedExtraKey] 标记防递归，
   /// 重试请求经过本拦截器时会被 [_shouldHeal] 跳过。
   final Dio dio;
+  final String _baseHost;
 
   /// 防递归标记 key（写入到 `RequestOptions.extra` 中）。
   static const String selfHealedExtraKey = '_selfHealed';
@@ -122,8 +124,7 @@ class SelfHealingInterceptor extends Interceptor {
     // 自愈只适用于 Discourse 主站会话 cookie (_t/_forum_session)。
     // CDK/LDC 等业务子域的 401 代表各自 OAuth 授权态失效，重试主站
     // session 修复没有意义，还会把一次过期放大成多次 user-info 请求。
-    if (response.requestOptions.uri.host.toLowerCase() !=
-        CookieJarService.appBaseHost) {
+    if (response.requestOptions.uri.host.toLowerCase() != _baseHost) {
       return false;
     }
 
@@ -152,7 +153,7 @@ class SelfHealingInterceptor extends Interceptor {
     final uri = options.uri;
 
     // 检查 jar 中 _t 是否有效（jar 无 _t = 真登出）
-    final jarT = await _jar.getCanonicalCookie('_t');
+    final jarT = await _jar.getCanonicalCookie('_t', uri: uri);
     final jarValid =
         jarT != null &&
         jarT.value.isNotEmpty &&

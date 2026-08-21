@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 
+import '../../../config/discourse_site.dart';
 import '../../cf_challenge_service.dart';
 import '../../cf_challenge_logger.dart';
 import '../../cf_clearance_refresh_service.dart';
@@ -17,26 +18,35 @@ import '../exceptions/api_exception.dart';
 /// Cloudflare 验证拦截器
 /// 处理 CF Turnstile 验证
 class CfChallengeInterceptor extends Interceptor {
-  CfChallengeInterceptor({required this.dio, required this.cookieJarService});
+  CfChallengeInterceptor({
+    required this.dio,
+    required this.cookieJarService,
+    required this.site,
+  });
 
   final Dio dio;
   final CookieJarService cookieJarService;
+  final DiscourseSite site;
 
-  /// 共享的 cookie 同步 Future：验证成功后只执行一次 sync
-  static Future<bool>? _activeSyncFuture;
+  /// 每个社区共享一条 cookie 同步 Future；不同社区不能复用验证结果。
+  static final Map<String, Future<bool>> _activeSyncFutures = {};
 
   static const _mutationMethods = {'POST', 'PUT', 'DELETE', 'PATCH'};
 
   /// 验证成功后的共享 Cookie 同步（只执行一次）
   Future<bool> _syncCookiesOnce() async {
     // 如果已有同步任务在进行，复用结果
-    if (_activeSyncFuture != null) return _activeSyncFuture!;
+    final active = _activeSyncFutures[site.id];
+    if (active != null) return active;
 
-    _activeSyncFuture = _doSync();
+    final future = _doSync();
+    _activeSyncFutures[site.id] = future;
     try {
-      return await _activeSyncFuture!;
+      return await future;
     } finally {
-      _activeSyncFuture = null;
+      if (identical(_activeSyncFutures[site.id], future)) {
+        _activeSyncFutures.remove(site.id);
+      }
     }
   }
 
@@ -44,7 +54,7 @@ class CfChallengeInterceptor extends Interceptor {
     // showManualVerify 内部已通过 CDP 将新 cf_clearance 同步到 CookieJar，
     // 先检查是否已存在，避免后续 syncFromWebView 在 Windows 上通过
     // CookieManager.getCookies() 读取到旧值并覆盖（Bug #5 fix 会先删后写）。
-    String? cfClearance = await cookieJarService.getCfClearance();
+    String? cfClearance = await cookieJarService.getCfClearance(uri: site.uri);
     if (cfClearance != null && cfClearance.isNotEmpty) {
       CfChallengeLogger.log(
         '[INTERCEPTOR] cf_clearance already in CookieJar: ${cfClearance.length} chars',
@@ -55,15 +65,17 @@ class CfChallengeInterceptor extends Interceptor {
     // CookieJar 中未找到 cf_clearance，走 WebView 同步兜底
     await Future.delayed(const Duration(milliseconds: 1500));
     await BoundarySyncService.instance.syncFromWebView(
+      currentUrl: site.baseUrl,
       cookieNames: {'cf_clearance'},
     );
 
     for (var i = 0; i < 3; i++) {
-      cfClearance = await cookieJarService.getCfClearance();
+      cfClearance = await cookieJarService.getCfClearance(uri: site.uri);
       if (cfClearance != null && cfClearance.isNotEmpty) break;
       debugPrint('[Dio] cf_clearance not found, retry ${i + 1}/3...');
       await Future.delayed(const Duration(milliseconds: 500));
       await BoundarySyncService.instance.syncFromWebView(
+        currentUrl: site.baseUrl,
         cookieNames: {'cf_clearance'},
       );
     }
@@ -120,13 +132,13 @@ class CfChallengeInterceptor extends Interceptor {
         !skipCfChallenge &&
         CfChallengeService.isCfChallengeResponse(err.response)) {
       // 备选提取 sitekey（从 403 响应体中）
-      CfClearanceRefreshService().extractAndUpdateSitekey(
-        err.response?.data?.toString() ?? '',
-      );
+      CfClearanceRefreshService.forSite(
+        site,
+      ).extractAndUpdateSitekey(err.response?.data?.toString() ?? '');
       // 403 说明 cf_clearance 已失效，停止自动续期（避免与手动验证冲突）。
       // 这里不需要 await——真正要建验证 WebView 前，showManualVerify 内部
       // 会自己再 await 一次 stop()，确保销毁完成。
-      unawaited(CfClearanceRefreshService().stop());
+      unawaited(CfClearanceRefreshService.forSite(site).stop());
 
       final requestUrl = err.requestOptions.uri.toString();
       final requestMethod = err.requestOptions.method.toUpperCase();
@@ -144,7 +156,7 @@ class CfChallengeInterceptor extends Interceptor {
         url: requestUrl,
         statusCode: statusCode!,
       );
-      final cfService = CfChallengeService();
+      final cfService = CfChallengeService.forSite(site);
       final isSilent = err.requestOptions.extra['isSilent'] == true;
       final shouldShowActionPrompt = _shouldShowActionPrompt(
         err.requestOptions,

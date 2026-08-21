@@ -4,9 +4,12 @@ import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../config/discourse_site.dart';
+import 'active_site_service.dart';
 import 'discourse/discourse_service.dart';
 import 'local_notification_service.dart' show navigatorKey;
 import 'network/cookie/cookie_jar_service.dart';
+import 'site_switch_coordinator.dart';
 import 'toast_service.dart';
 import 'user_api_key_service.dart';
 import 'package:m3e_ui/m3e_ui.dart';
@@ -35,6 +38,7 @@ class UserApiKeyLoginFlow {
 
   bool _handling = false;
   OverlayEntry? _loadingEntry;
+  DiscourseSite? _flowSite;
 
   /// 深链回到 App 后,兑换+收口这段有网络耗时(可能还含 CF 验证),
   /// 用全局 overlay 给用户一个"正在完成登录"的反馈,避免看起来卡死。
@@ -56,7 +60,11 @@ class UserApiKeyLoginFlow {
   /// 构建授权 URL 并拉起系统浏览器。返回是否成功拉起。
   /// 首次调用会懒生成 RSA 密钥对(isolate,可能耗时数秒)。
   Future<bool> start() async {
-    final authorizeUrl = await UserApiKeyService().buildAuthorizeUrl();
+    final site = ActiveSiteService.instance.current;
+    _flowSite = site;
+    final authorizeUrl = await UserApiKeyService.forSite(
+      site,
+    ).buildAuthorizeUrl();
     try {
       // Android 用 Custom Tabs(inAppBrowserView),不用 externalApplication:
       // Chrome 对已建立 App Links 关联的域名(fluxdo 已 autoVerify linux.do)会把
@@ -79,13 +87,54 @@ class UserApiKeyLoginFlow {
     if (_handling) return;
     _handling = true;
     try {
-      final userApiKeyService = UserApiKeyService();
-      final result = await userApiKeyService.handleAuthRedirect(uri);
+      final preferredSite = _flowSite ?? ActiveSiteService.instance.current;
+      if (_flowSite != null &&
+          preferredSite.id != ActiveSiteService.instance.current.id) {
+        final switchResult = await SiteSwitchCoordinator.instance.switchTo(
+          preferredSite,
+        );
+        if (switchResult != SiteSwitchResult.switched &&
+            switchResult != SiteSwitchResult.unchanged) {
+          ToastService.showError('无法切换到 ${preferredSite.displayName} 完成授权');
+          return;
+        }
+      }
+      final candidateSites = <DiscourseSite>[
+        preferredSite,
+        for (final site in DiscourseSiteRegistry.all)
+          if (site.id != preferredSite.id &&
+              site.supportsBrowserAuthorizationLogin)
+            site,
+      ];
+
+      DiscourseSite? callbackSite;
+      UserApiKeyService? userApiKeyService;
+      ({bool ok, String? otp, bool stale})? result;
+      for (final site in candidateSites) {
+        final candidateService = UserApiKeyService.forSite(site);
+        final candidateResult = await candidateService.handleAuthRedirect(uri);
+        if (candidateResult.stale) continue;
+        callbackSite = site;
+        userApiKeyService = candidateService;
+        result = candidateResult;
+        break;
+      }
       // 冷启动 getInitialLink 会重放上次的 auth_redirect 深链;非本次授权流程
       // (nonce 已消费/不匹配)静默忽略,不弹 toast、不通知登录页。
-      if (result.stale) {
+      if (result == null || callbackSite == null || userApiKeyService == null) {
         debugPrint('[UserApiKeyLoginFlow] 忽略残留授权回调');
         return;
+      }
+      _flowSite = null;
+      if (callbackSite.id != ActiveSiteService.instance.current.id) {
+        final switchResult = await SiteSwitchCoordinator.instance.switchTo(
+          callbackSite,
+        );
+        if (switchResult != SiteSwitchResult.switched &&
+            switchResult != SiteSwitchResult.unchanged) {
+          ToastService.showError('无法切换到 ${callbackSite.displayName} 完成授权');
+          return;
+        }
       }
       if (!result.ok) {
         ToastService.showError('授权回调解析失败,请重新授权');
@@ -95,9 +144,12 @@ class UserApiKeyLoginFlow {
 
       // 已有登录态:只是补授权。scopes 含 write 才值得留 key 做自愈;
       // 否则(linux.do 现状)立即焚毁,不留永久零权限凭据
-      final existingToken = await CookieJarService().getTToken();
+      final existingToken = await CookieJarService().getTToken(
+        uri: callbackSite.uri,
+      );
+      final discourseService = DiscourseService.forSite(callbackSite);
       if (existingToken != null && existingToken.isNotEmpty) {
-        await userApiKeyService.burnAfterLoginIfUseless(DiscourseService().dio);
+        await userApiKeyService.burnAfterLoginIfUseless(discourseService.dio);
         ToastService.showSuccess('授权成功');
         onFlowFinished?.call(true);
         return;
@@ -106,7 +158,7 @@ class UserApiKeyLoginFlow {
       // 无登录态:用随行 OTP 兑换 _t 完成登录(纯 dio)
       final otp = result.otp;
       if (otp == null) {
-        await userApiKeyService.burnAfterLoginIfUseless(DiscourseService().dio);
+        await userApiKeyService.burnAfterLoginIfUseless(discourseService.dio);
         ToastService.showError('授权成功,但未收到登录令牌,请重试');
         onFlowFinished?.call(false);
         return;
@@ -115,7 +167,7 @@ class UserApiKeyLoginFlow {
       // 兑换 + 收口有网络耗时,显示全局 loading 反馈
       _showLoading('正在完成登录…');
       try {
-        final service = DiscourseService();
+        final service = discourseService;
         final token = await userApiKeyService.redeemOtp(service.dio, otp);
         if (token == null) {
           await userApiKeyService.burnAfterLoginIfUseless(service.dio);

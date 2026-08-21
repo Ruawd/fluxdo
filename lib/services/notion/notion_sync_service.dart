@@ -59,15 +59,21 @@ class NotionDuplicateException implements Exception {
 /// 流程：fetchPostsForExport → renderMarkdown → 转 blocks →
 /// createPage (前 100 块) → appendBlockChildren (剩余分批) → 写 ExportHistory。
 class NotionSyncService {
-  NotionSyncService({required this.config, NotionClient? client})
+  NotionSyncService({
+    required this.config,
+    NotionClient? client,
+    String? siteBaseUrl,
+  })
     : assert(
         config.isComplete,
         'NotionConfig 必须先校验 isComplete 才能创建 service',
       ),
-      _client = client ?? NotionClient(config.integrationToken!);
+      _client = client ?? NotionClient(config.integrationToken!),
+      _siteBaseUrl = siteBaseUrl ?? AppConstants.baseUrl;
 
   final NotionConfig config;
   final NotionClient _client;
+  final String _siteBaseUrl;
 
   /// Notion API 限制：单次 createPage / appendBlockChildren 的 children ≤ 100。
   static const int _kChildrenPerRequest = 100;
@@ -347,7 +353,7 @@ class NotionSyncService {
         : null;
     final author = firstPost?.username ?? '';
     final created = firstPost?.createdAt.toUtc().toIso8601String();
-    final url = '${AppConstants.baseUrl}/t/${detail.slug}/${detail.id}';
+    final url = '$_siteBaseUrl/t/${detail.slug}/${detail.id}';
     return {
       'Name': {
         'title': [
@@ -386,7 +392,7 @@ class NotionSyncService {
     final name =
         '${_truncate(detail.title, 160)} · @${post.username} #${post.postNumber}';
     final url =
-        '${AppConstants.baseUrl}/t/${detail.slug}/${detail.id}/${post.postNumber}';
+        '$_siteBaseUrl/t/${detail.slug}/${detail.id}/${post.postNumber}';
     return {
       'Name': {
         'title': [

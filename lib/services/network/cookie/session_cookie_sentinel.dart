@@ -94,7 +94,7 @@ class SessionCookieSentinel {
   }) async {
     if (!force &&
         intent == SweepIntent.ensureUnique &&
-        wasRecentlySwept(name)) {
+        wasRecentlySwept(name, url: url)) {
       return SweepResult(
         name: name,
         status: SweepStatus.noop,
@@ -162,7 +162,7 @@ class SessionCookieSentinel {
     Duration? primingDuration;
     try {
       final uri = Uri.parse(url);
-      await _jar.enforceAuthCookiePolicy(reason: 'nuclear_reset');
+      await _jar.enforceAuthCookiePolicy(reason: 'nuclear_reset', siteUri: uri);
       final jarCookies = await _jar.loadCanonicalCookiesForRequest(uri);
 
       // 1. 清空 WV: jar+WV 联合 name set 的所有 variant
@@ -244,8 +244,13 @@ class SessionCookieSentinel {
   }
 
   /// 该 name 最近 [within] 时长内是否 sweep 过。
-  bool wasRecentlySwept(String name, {Duration within = _throttleWindow}) {
-    final last = _lastSweptAt[name];
+  bool wasRecentlySwept(
+    String name, {
+    String? url,
+    Duration within = _throttleWindow,
+  }) {
+    final key = url == null ? name : _sweepScopeKey(url, name);
+    final last = _lastSweptAt[key];
     if (last == null) return false;
     return DateTime.now().difference(last) < within;
   }
@@ -340,7 +345,7 @@ class SessionCookieSentinel {
 
     final after = await _writer.countCookiesByName(url, name);
     if (after == 0 || await _residualIsAcceptable(url, name, 0)) {
-      _markSweepSuccess(name);
+      _markSweepSuccess(url, name);
       final result = SweepResult(
         name: name,
         status: SweepStatus.swept,
@@ -378,7 +383,7 @@ class SessionCookieSentinel {
     required Stopwatch stopwatch,
   }) async {
     if (variantsBefore <= 1) {
-      _markSweepSuccess(name);
+      _markSweepSuccess(url, name);
       final result = SweepResult(
         name: name,
         status: SweepStatus.noop,
@@ -409,7 +414,7 @@ class SessionCookieSentinel {
     final variants = allInfos
         .where((c) => c.name == name)
         .toList(growable: false);
-    final winnerResult = await _pickWinner(name, variants);
+    final winnerResult = await _pickWinner(Uri.parse(url), name, variants);
 
     // CHECK 3: generation (在副作用前)
     if (_isCancelled(entryGen)) {
@@ -425,7 +430,7 @@ class SessionCookieSentinel {
       if (winnerResult != null && winnerResult.source == 'webview') {
         await _syncWinnerToJar(url, winnerResult.cookieInfo);
       }
-      _markSweepSuccess(name);
+      _markSweepSuccess(url, name);
       final result = SweepResult(
         name: name,
         status: SweepStatus.swept,
@@ -456,7 +461,7 @@ class SessionCookieSentinel {
 
     final after = await _writer.countCookiesByName(url, name);
     if (after <= 1 || await _residualIsAcceptable(url, name, 1)) {
-      _markSweepSuccess(name);
+      _markSweepSuccess(url, name);
 
       // 反向同步 jar（仅当 winner 来自 webview，避免覆写 jar 的最新值）
       if (winnerResult != null && winnerResult.source == 'webview') {
@@ -507,9 +512,9 @@ class SessionCookieSentinel {
     int expectedMaxAfter,
   ) async {
     if (!_chipsCookieNames.contains(name)) return false;
-    final variants = (await _writer.getAllCookieInfos(url))
-        .where((c) => c.name == name)
-        .toList(growable: false);
+    final variants = (await _writer.getAllCookieInfos(
+      url,
+    )).where((c) => c.name == name).toList(growable: false);
     if (variants.isEmpty) return true;
     final partitioned = variants.where((c) => c.isPartitioned == true).length;
     final nonPartitioned = variants.length - partitioned;
@@ -590,6 +595,7 @@ class SessionCookieSentinel {
   ///
   /// Android 旧设备字段缺失时自动降级 (只剩 1/2/6 三条规则可用)。
   Future<_WinnerInfo?> _pickWinner(
+    Uri uri,
     String name,
     List<CookieFullInfo> variants,
   ) async {
@@ -597,7 +603,7 @@ class SessionCookieSentinel {
 
     CanonicalCookie? jarCookie;
     try {
-      jarCookie = await _jar.getCanonicalCookie(name);
+      jarCookie = await _jar.getCanonicalCookie(name, uri: uri);
     } catch (e) {
       debugPrint('[Sentinel] _pickWinner jar lookup failed: $e');
     }
@@ -838,7 +844,8 @@ class SessionCookieSentinel {
     final after = await _writer.countCookiesByName(url, name);
     final expectedMaxAfter = intent == SweepIntent.delete ? 0 : 1;
     final targetSatisfied =
-        after <= expectedMaxAfter || await _residualIsAcceptable(url, name, expectedMaxAfter);
+        after <= expectedMaxAfter ||
+        await _residualIsAcceptable(url, name, expectedMaxAfter);
     final status = targetSatisfied
         ? SweepStatus.nuclearReset
         : SweepStatus.failed;
@@ -916,9 +923,17 @@ class SessionCookieSentinel {
     );
   }
 
-  void _markSweepSuccess(String name) {
-    _lastSweptAt[name] = DateTime.now();
+  void _markSweepSuccess(String url, String name) {
+    _lastSweptAt[_sweepScopeKey(url, name)] = DateTime.now();
     _consecutiveLockTimeouts.remove(name);
+  }
+
+  String _sweepScopeKey(String url, String name) {
+    final uri = Uri.tryParse(url);
+    final scope = uri == null || !uri.hasScheme || uri.host.isEmpty
+        ? url
+        : uri.origin;
+    return '$scope|$name';
   }
 
   SweepResult _handleLockTimeout(String name) {

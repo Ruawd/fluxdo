@@ -6,7 +6,7 @@ import 'dart:io' as io;
 import 'package:flutter/material.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 
-import '../constants.dart';
+import '../config/discourse_site.dart';
 import '../utils/frame_jank_monitor.dart';
 import 'app_logger.dart';
 import 'cf_challenge_logger.dart';
@@ -20,6 +20,7 @@ import 'preloaded_data_service.dart';
 import 'webview_session_cookie_refresh_service.dart';
 import 'webview_settings.dart';
 import 'windows_webview_environment_service.dart';
+import 'active_site_service.dart';
 
 enum BrowserTrustPreloadPath { native, webView }
 
@@ -72,8 +73,23 @@ Future<T?> runBrowserTrustTaskWithSafeTimeout<T>({
 /// 负责启动/恢复阶段的浏览器态准备，避免 WebView priming、session bootstrap、
 /// cf_clearance 维护、预加载请求在 main / widget 中散落。
 class BrowserTrustCoordinator {
-  BrowserTrustCoordinator._();
-  static final BrowserTrustCoordinator instance = BrowserTrustCoordinator._();
+  BrowserTrustCoordinator._(DiscourseSite site)
+    : _site = site,
+      _siteBaseUrl = site.baseUrl,
+      _siteUri = site.uri,
+      _preload = PreloadedDataService.forSite(site);
+  static final Map<String, BrowserTrustCoordinator> _instances = {};
+  static BrowserTrustCoordinator get instance {
+    final site = ActiveSiteService.instance.current;
+    return _instances.putIfAbsent(
+      site.id,
+      () => BrowserTrustCoordinator._(site),
+    );
+  }
+
+  final DiscourseSite _site;
+  final String _siteBaseUrl;
+  final Uri _siteUri;
 
   static const Duration _trustedClearanceMinTtl = Duration(minutes: 10);
   static const Duration _requestClearanceMinTtl = Duration(seconds: 30);
@@ -86,13 +102,14 @@ class BrowserTrustCoordinator {
   static const Duration _webViewTeardownCooldown = Duration(milliseconds: 1200);
 
   final CookieJarService _jar = CookieJarService();
-  final PreloadedDataService _preload = PreloadedDataService();
+  final PreloadedDataService _preload;
 
   Future<void>? _activePreload;
   Future<bool>? _activeBrowserTrust;
   Future<bool>? _activeBrowserTrustGate;
   Timer? _backgroundPauseTimer;
   String? _pendingClearanceRefreshReason;
+  bool _suspendedForSiteSwitch = false;
 
   /// 导航 context,供 bootstrap 被 CF 挡下时主动发起 CF 验证(showManualVerify)。
   BuildContext? _navigatorContext;
@@ -119,12 +136,13 @@ class BrowserTrustCoordinator {
 
   void setNavigatorContext(BuildContext context) {
     _navigatorContext = context;
-    DiscourseService().setNavigatorContext(context);
+    DiscourseService.forSite(_site).setNavigatorContext(context);
     _preload.setNavigatorContext(context);
   }
 
   /// 启动期轻量准备：只做 cookie priming，不加载首页，不阻塞 runApp。
   void prepareStartup({String reason = 'startup'}) {
+    _suspendedForSiteSwitch = false;
     unawaited(
       _primeWebViewCookies(reason: reason).catchError((Object e) {
         _log('startup priming failed: $e', level: 'warning');
@@ -132,7 +150,27 @@ class BrowserTrustCoordinator {
     );
   }
 
+  /// 切换社区前停止旧站点的定时任务，并给在途 WebView 一小段排水时间。
+  Future<void> suspendForSiteSwitch() async {
+    _suspendedForSiteSwitch = true;
+    _backgroundPauseTimer?.cancel();
+    _backgroundPauseTimer = null;
+    _pendingClearanceRefreshReason = null;
+
+    final running = <Future<dynamic>>[
+      if (_activePreload != null) _activePreload!,
+      if (_activeBrowserTrust != null) _activeBrowserTrust!,
+    ];
+    if (running.isEmpty) return;
+    try {
+      await Future.wait(running).timeout(const Duration(seconds: 8));
+    } catch (e) {
+      _log('site switch drain timeout/failed: $e', level: 'warning');
+    }
+  }
+
   void pauseForBackground() {
+    if (_suspendedForSiteSwitch) return;
     _backgroundPauseTimer?.cancel();
     final delay = CfChallengeLogger.isEnabled
         ? _diagnosticBackgroundPauseDelay
@@ -141,19 +179,20 @@ class BrowserTrustCoordinator {
     _backgroundPauseTimer = Timer(delay, () {
       _backgroundPauseTimer = null;
       _log('execute delayed cf_clearance refresh pause');
-      CfClearanceRefreshService().pause();
+      CfClearanceRefreshService.forSite(_site).pause();
     });
   }
 
   /// 前台恢复：恢复 cf_clearance 维护，并在后台补一次浏览器 session bootstrap。
   void resumeFromBackground({String reason = 'resume', bool force = false}) {
+    if (_suspendedForSiteSwitch) return;
     final hadPendingPause = _backgroundPauseTimer != null;
     _backgroundPauseTimer?.cancel();
     _backgroundPauseTimer = null;
     if (hadPendingPause) {
       _log('cancel scheduled cf_clearance refresh pause: reason=$reason');
     }
-    CfClearanceRefreshService().resume();
+    CfClearanceRefreshService.forSite(_site).resume();
     unawaited(
       ensureBrowserTrust(reason: reason, force: force).catchError((Object e) {
         _log('resume browser trust failed: $e', level: 'warning');
@@ -187,6 +226,7 @@ class BrowserTrustCoordinator {
     String reason = 'unknown',
     bool force = false,
   }) {
+    if (_suspendedForSiteSwitch) return Future.value(false);
     if (!force) {
       final active = _activeBrowserTrust;
       if (active != null) return active;
@@ -265,8 +305,9 @@ class BrowserTrustCoordinator {
   }
 
   void _startClearanceRefreshNow({required String reason}) {
+    if (_suspendedForSiteSwitch) return;
     _log('start cf_clearance refresh: reason=$reason');
-    CfClearanceRefreshService().start();
+    CfClearanceRefreshService.forSite(_site).start();
   }
 
   Future<void> _ensurePreloadedInternal({required String reason}) async {
@@ -322,7 +363,7 @@ class BrowserTrustCoordinator {
   }
 
   void _startBrowserTrustAfterNativePreload({required String reason}) {
-    if (!_preload.isLoaded) return;
+    if (_suspendedForSiteSwitch || !_preload.isLoaded) return;
     if (_preload.currentUserSync == null) {
       _log('skip native preload browser trust settle: not logged in');
       return;
@@ -372,8 +413,9 @@ class BrowserTrustCoordinator {
       'browser trust session bootstrap begin reason=$reason '
       'force=$forceSessionSync',
     );
-    var bootstrap = await WebViewSessionCookieRefreshService.instance
-        .ensureSynced(reason: reason, force: forceSessionSync);
+    var bootstrap = await WebViewSessionCookieRefreshService.forSite(
+      _site,
+    ).ensureSynced(reason: reason, force: forceSessionSync);
     // bootstrap 被 CF(403/429)挡下:作废本地假阳性信任,复用/发起 CF 验证拿到
     // 新 cf_clearance 后 force 重跑一次,避免与 Dio 侧的 CF 自愈各自为政。
     if (bootstrap.cfBlocked) {
@@ -417,7 +459,7 @@ class BrowserTrustCoordinator {
       tag: 'BrowserTrust',
     );
 
-    final cf = CfChallengeService();
+    final cf = CfChallengeService.forSite(_site);
     var gotClearance = false;
 
     final resolvedAt = cf.clearanceResolvedAt.value;
@@ -451,8 +493,9 @@ class BrowserTrustCoordinator {
     // 等 CF teardown gate（内部含 1.2 秒冷却）后才能创建 Session WebView。
     await cf.waitForManualTeardown();
     _log('CF clearance obtained, force re-run bootstrap reason=$reason');
-    final retry = await WebViewSessionCookieRefreshService.instance
-        .ensureSynced(reason: '$reason:cf_recover', force: true);
+    final retry = await WebViewSessionCookieRefreshService.forSite(
+      _site,
+    ).ensureSynced(reason: '$reason:cf_recover', force: true);
     _log(
       'bootstrap re-run after CF: ok=${retry.ok} cfBlocked=${retry.cfBlocked} '
       'reason=$reason',
@@ -499,7 +542,7 @@ class BrowserTrustCoordinator {
 
   Future<void> _primeWebViewCookies({required String reason}) async {
     try {
-      await WebViewCookiePriming.instance.prime(AppConstants.baseUrl);
+      await WebViewCookiePriming.instance.prime(_siteBaseUrl);
     } catch (e) {
       _log(
         'WebView cookie priming failed: reason=$reason $e',
@@ -574,7 +617,7 @@ class BrowserTrustCoordinator {
       } else {
         await c.loadData(
           data: _startupShellHtml,
-          baseUrl: WebUri(AppConstants.baseUrl),
+          baseUrl: WebUri(_siteBaseUrl),
           mimeType: 'text/html',
           encoding: 'utf-8',
         );
@@ -602,7 +645,7 @@ class BrowserTrustCoordinator {
         level: hydrated ? 'info' : 'warning',
       );
 
-      final tToken = await _jar.getTToken();
+      final tToken = await _jar.getTToken(uri: _siteUri);
       if (tToken != null && tToken.isNotEmpty) {
         if (cancellation.isCancelled) return false;
         _log('startup WebView session bootstrap begin reason=$reason');
@@ -620,16 +663,16 @@ class BrowserTrustCoordinator {
         await _syncCookiesFromController(c);
         if (cancellation.isCancelled) return false;
         final runtimeDetails = await _jar.getCookieDiagnosticsForRequest(
-          Uri.parse(AppConstants.baseUrl),
+          Uri.parse(_siteBaseUrl),
           names: const {'_rt'},
         );
         final hasRuntimeCookie = runtimeDetails.any(
           (cookie) => (cookie['valueLength'] as int? ?? 0) > 0,
         );
         if (bootstrapped && hasRuntimeCookie) {
-          WebViewSessionCookieRefreshService.instance.markSynced(
+          WebViewSessionCookieRefreshService.forSite(_site).markSynced(
             reason: '$reason:startup_webview',
-            tToken: await _jar.getTToken(),
+            tToken: await _jar.getTToken(uri: _siteUri),
             hasRuntimeCookie: hasRuntimeCookie,
           );
         }
@@ -658,7 +701,7 @@ class BrowserTrustCoordinator {
   Future<void> _navigateToHome(InAppWebViewController controller) async {
     await controller.loadUrl(
       urlRequest: URLRequest(
-        url: WebUri(AppConstants.baseUrl),
+        url: WebUri(_siteBaseUrl),
         headers: const {
           'Accept':
               'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
@@ -709,7 +752,7 @@ class BrowserTrustCoordinator {
     InAppWebViewController controller,
   ) async {
     await BoundarySyncService.instance.syncFromWebView(
-      currentUrl: AppConstants.baseUrl,
+      currentUrl: _siteBaseUrl,
       controller: controller,
       cookieNames: null,
       allowLowConfidenceSessionCookies: true,
@@ -728,7 +771,10 @@ class BrowserTrustCoordinator {
     if (!_jar.isInitialized) {
       await _jar.initialize();
     }
-    final clearance = await _jar.getCanonicalCookie('cf_clearance');
+    final clearance = await _jar.getCanonicalCookie(
+      'cf_clearance',
+      uri: _siteUri,
+    );
     if (clearance == null || clearance.value.isEmpty) {
       _log('native trust check: untrusted, no cf_clearance');
       return false;
@@ -764,7 +810,10 @@ class BrowserTrustCoordinator {
     if (!_jar.isInitialized) {
       await _jar.initialize();
     }
-    final clearance = await _jar.getCanonicalCookie('cf_clearance');
+    final clearance = await _jar.getCanonicalCookie(
+      'cf_clearance',
+      uri: _siteUri,
+    );
     if (clearance == null || clearance.value.isEmpty) {
       _log('request gate trust check: untrusted, no cf_clearance');
       return false;
@@ -830,7 +879,7 @@ document.close();
     );
   }
 
-  String get _windowsBootstrapUrl => '${AppConstants.baseUrl}/robots.txt';
+  String get _windowsBootstrapUrl => '${_siteBaseUrl}/robots.txt';
 
   String get _startupShellHtml =>
       '<!DOCTYPE html><html><head><meta charset="utf-8"></head>'

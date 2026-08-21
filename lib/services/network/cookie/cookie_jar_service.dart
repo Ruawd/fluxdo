@@ -7,6 +7,7 @@ import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as path;
 
+import '../../../config/discourse_site.dart';
 import '../../../constants.dart';
 import '../../windows_webview_environment_service.dart';
 import 'cookie_logger.dart';
@@ -130,6 +131,7 @@ class CookieJarService {
   Future<int> enforceAuthCookiePolicy({
     String reason = 'unknown',
     Iterable<String>? names,
+    Uri? siteUri,
   }) async {
     if (!_initialized) await initialize();
 
@@ -137,7 +139,7 @@ class CookieJarService {
     if (jar is! EnhancedPersistCookieJar) return 0;
 
     try {
-      final baseUri = Uri.parse(AppConstants.baseUrl);
+      final baseUri = siteUri ?? Uri.parse(AppConstants.baseUrl);
       final baseHost = baseUri.host.toLowerCase();
       final targetNames = (names ?? hostOnlyCookieNames)
           .where(hostOnlyCookieNames.contains)
@@ -152,7 +154,10 @@ class CookieJarService {
             .where(
               (cookie) =>
                   cookie.name == name &&
-                  matchesAppHost(cookie.normalizedDomain ?? cookie.domain),
+                  matchesSiteHost(
+                    cookie.normalizedDomain ?? cookie.domain,
+                    baseHost,
+                  ),
             )
             .toList(growable: false);
         if (candidates.isEmpty) continue;
@@ -279,7 +284,7 @@ class CookieJarService {
       sourcePort: source.sourcePort,
       partitionKey: source.partitionKey,
       partitioned: source.partitioned,
-      originUrl: AppConstants.baseUrl,
+      originUrl: baseUri.origin,
       source: source.source,
       version: source.version,
       lastSyncedToWebViewAt: source.lastSyncedToWebViewAt,
@@ -307,12 +312,12 @@ class CookieJarService {
   // ---------------------------------------------------------------------------
 
   /// 获取指定 Cookie 的值
-  Future<String?> getCookieValue(String name) async {
+  Future<String?> getCookieValue(String name, {Uri? uri}) async {
     if (!_initialized) await initialize();
 
     try {
-      final uri = Uri.parse(AppConstants.baseUrl);
-      final cookies = await _cookieJar!.loadForRequest(uri);
+      final targetUri = uri ?? Uri.parse(AppConstants.baseUrl);
+      final cookies = await _cookieJar!.loadForRequest(targetUri);
 
       for (final cookie in cookies) {
         if (cookie.name == name) {
@@ -354,10 +359,10 @@ class CookieJarService {
   }
 
   /// 获取指定名称的 CanonicalCookie
-  Future<CanonicalCookie?> getCanonicalCookie(String name) async {
+  Future<CanonicalCookie?> getCanonicalCookie(String name, {Uri? uri}) async {
     if (!_initialized) await initialize();
-    final uri = Uri.parse(AppConstants.baseUrl);
-    final cookies = await loadCanonicalCookiesForRequest(uri);
+    final targetUri = uri ?? Uri.parse(AppConstants.baseUrl);
+    final cookies = await loadCanonicalCookiesForRequest(targetUri);
 
     for (final cookie in cookies) {
       if (cookie.name == name) return cookie;
@@ -479,7 +484,11 @@ class CookieJarService {
         await _cookieJar!.saveFromResponse(uri, [cookie]);
       }
       if (hostOnlyCookieNames.contains(name)) {
-        await enforceAuthCookiePolicy(reason: 'setCookie', names: {name});
+        await enforceAuthCookiePolicy(
+          reason: 'setCookie',
+          names: {name},
+          siteUri: uri,
+        );
       }
     } catch (e) {
       debugPrint('[CookieJar] Failed to set cookie $name: $e');
@@ -487,21 +496,21 @@ class CookieJarService {
   }
 
   /// 删除指定 Cookie
-  Future<void> deleteCookie(String name) async {
+  Future<void> deleteCookie(String name, {Uri? uri}) async {
     if (!_initialized) await initialize();
 
     try {
-      final uri = Uri.parse(AppConstants.baseUrl);
+      final targetUri = uri ?? Uri.parse(AppConstants.baseUrl);
       final jar = _cookieJar;
       if (jar is EnhancedPersistCookieJar) {
         // 显式删除走 deleteByName，绕过新鲜度仲裁。
         // 旧实现写"已过期同名 cookie"，会被 isFresherThan 判定为旧值而
         // 静默跳过，对未过期的持久 cookie（如 cf_clearance）是 no-op。
-        await jar.deleteByName(uri, name);
+        await jar.deleteByName(targetUri, name);
       } else {
         // 内存 jar fallback：写过期 cookie 让 DefaultCookieJar 自行清除
         final expired = DateTime.now().subtract(const Duration(days: 1));
-        final hosts = await getKnownHostsForDomain(uri.host);
+        final hosts = await getKnownHostsForDomain(targetUri.host);
 
         for (final host in hosts) {
           final hostUri = Uri.parse('https://$host');
@@ -571,14 +580,44 @@ class CookieJarService {
     }
   }
 
-  /// 从 WebView cookie store 删除指定名称的 cookie。
-  /// 同时尝试 host-only / host / .host 三种变体，避免不同 WebView
-  /// cookie store 的 domain 形态不一致导致残留。
-  Future<void> deleteWebViewCookie(String name) async {
+  /// 只清除当前社区及其子域 Cookie。
+  ///
+  /// 多社区模式下，退出 IDC Flare 不应同时清掉 Linux.do 的 `_t`；反之亦然。
+  /// 全量清理仍保留给数据管理页的“清除所有数据”。
+  Future<void> clearCurrentSite({Uri? siteUri}) async {
     if (!_initialized) await initialize();
 
     try {
-      final baseHost = Uri.parse(AppConstants.baseUrl).host;
+      final baseUri = siteUri ?? Uri.parse(AppConstants.baseUrl);
+      final knownHosts = await getKnownHostsForDomain(baseUri.host);
+      knownHosts.add(baseUri.host);
+
+      // 每个已知 host 都删一次：base host 覆盖 domain cookie，子域循环覆盖
+      // host-only cookie。CookieJar.delete 不会触碰无关站点。
+      for (final host in knownHosts) {
+        await _cookieJar!.delete(Uri.parse('https://$host'), true);
+      }
+
+      await _strategy.clearWebViewCookiesForSite(
+        webViewCookieManager,
+        knownHosts,
+        baseUri.origin,
+      );
+
+      CookieLogger.delete(name: '*', source: 'clearCurrentSite');
+    } catch (e) {
+      debugPrint('[CookieJar] Failed to clear current site cookies: $e');
+    }
+  }
+
+  /// 从 WebView cookie store 删除指定名称的 cookie。
+  /// 同时尝试 host-only / host / .host 三种变体，避免不同 WebView
+  /// cookie store 的 domain 形态不一致导致残留。
+  Future<void> deleteWebViewCookie(String name, {Uri? siteUri}) async {
+    if (!_initialized) await initialize();
+
+    try {
+      final baseHost = (siteUri ?? Uri.parse(AppConstants.baseUrl)).host;
       final hosts = await getKnownHostsForDomain(baseHost);
       await _deleteWebViewCookieVariants(name, hosts);
     } catch (e) {
@@ -614,14 +653,14 @@ class CookieJarService {
   // ---------------------------------------------------------------------------
 
   /// 获取 _t token
-  Future<String?> getTToken() => getCookieValue('_t');
+  Future<String?> getTToken({Uri? uri}) => getCookieValue('_t', uri: uri);
 
   /// 获取 _t 的诊断信息
-  Future<Map<String, dynamic>> getTTokenDiagnostics() async {
+  Future<Map<String, dynamic>> getTTokenDiagnostics({Uri? uri}) async {
     if (!_initialized) await initialize();
     try {
-      final uri = Uri.parse(AppConstants.baseUrl);
-      final cookies = await _cookieJar!.loadForRequest(uri);
+      final targetUri = uri ?? Uri.parse(AppConstants.baseUrl);
+      final cookies = await _cookieJar!.loadForRequest(targetUri);
       final tCookies = cookies.where((c) => c.name == '_t').toList();
       return {
         'count': tCookies.length,
@@ -642,14 +681,15 @@ class CookieJarService {
   }
 
   /// 获取 cf_clearance
-  Future<String?> getCfClearance() => getCookieValue('cf_clearance');
+  Future<String?> getCfClearance({Uri? uri}) =>
+      getCookieValue('cf_clearance', uri: uri);
 
   /// 获取 cf_clearance 的原始 Cookie 对象
-  Future<io.Cookie?> getCfClearanceCookie() async {
+  Future<io.Cookie?> getCfClearanceCookie({Uri? uri}) async {
     if (!_initialized) await initialize();
     try {
-      final uri = Uri.parse(AppConstants.baseUrl);
-      final cookies = await _cookieJar!.loadForRequest(uri);
+      final targetUri = uri ?? Uri.parse(AppConstants.baseUrl);
+      final cookies = await _cookieJar!.loadForRequest(targetUri);
       for (final cookie in cookies) {
         if (cookie.name == 'cf_clearance') return cookie;
       }
@@ -660,11 +700,11 @@ class CookieJarService {
   }
 
   /// 恢复 cf_clearance（退出登录后保留 CF 通行证）
-  Future<void> restoreCfClearance(io.Cookie cookie) async {
+  Future<void> restoreCfClearance(io.Cookie cookie, {Uri? uri}) async {
     if (!_initialized) await initialize();
     try {
-      final uri = Uri.parse(AppConstants.baseUrl);
-      await _cookieJar!.saveFromResponse(uri, [cookie]);
+      final targetUri = uri ?? Uri.parse(AppConstants.baseUrl);
+      await _cookieJar!.saveFromResponse(targetUri, [cookie]);
     } catch (e) {
       debugPrint('[CookieJar] Failed to restore cf_clearance: $e');
     }
@@ -707,23 +747,31 @@ class CookieJarService {
     Uri uri,
   ) {
     final requestHost = uri.host.toLowerCase();
+    final baseHost =
+        DiscourseSiteRegistry.byHost(requestHost)?.host ?? appBaseHost;
     final selected = <String, io.Cookie>{};
     for (final cookie in cookies) {
       final isHostOnlyAuth = hostOnlyCookieNames.contains(cookie.name);
-      if (isHostOnlyAuth && requestHost != appBaseHost) continue;
+      if (isHostOnlyAuth && requestHost != baseHost) continue;
       final key = isHostOnlyAuth
           ? cookie.name
           : '${cookie.name}|${cookie.path ?? '/'}';
       final existing = selected[key];
       if (existing == null ||
-          _compareHeaderCookiePriority(cookie, existing, requestHost) > 0) {
+          _compareHeaderCookiePriority(
+                cookie,
+                existing,
+                requestHost,
+                baseHost,
+              ) >
+              0) {
         selected[key] = cookie;
       }
     }
     return selected.values.toList()..sort((a, b) {
       final pathCompare = (b.path?.length ?? 0).compareTo(a.path?.length ?? 0);
       if (pathCompare != 0) return pathCompare;
-      return _compareHeaderCookiePriority(b, a, requestHost);
+      return _compareHeaderCookiePriority(b, a, requestHost, baseHost);
     });
   }
 
@@ -731,10 +779,11 @@ class CookieJarService {
     io.Cookie candidate,
     io.Cookie existing,
     String requestHost,
+    String baseHost,
   ) {
     final scoreDiff =
-        _headerCookiePriorityScore(candidate, requestHost) -
-        _headerCookiePriorityScore(existing, requestHost);
+        _headerCookiePriorityScore(candidate, requestHost, baseHost) -
+        _headerCookiePriorityScore(existing, requestHost, baseHost);
     if (scoreDiff != 0) return scoreDiff;
 
     // 同分时按过期时间取最新("取新"兜底,同 AppCookieManager):同名多枚时
@@ -752,7 +801,11 @@ class CookieJarService {
     return candidate.value.length.compareTo(existing.value.length);
   }
 
-  static int _headerCookiePriorityScore(io.Cookie cookie, String requestHost) {
+  static int _headerCookiePriorityScore(
+    io.Cookie cookie,
+    String requestHost,
+    String baseHost,
+  ) {
     final normalizedDomain = cookie.domain?.trim().toLowerCase().replaceFirst(
       RegExp(r'^\.'),
       '',
@@ -772,7 +825,7 @@ class CookieJarService {
     }
 
     if (isHostOnlyAuth) {
-      if (requestHost == appBaseHost) score += 2000;
+      if (requestHost == baseHost) score += 2000;
       if (isRootPath) score += 1500;
       if (cookie.httpOnly) score += 250;
       if (cookie.secure) score += 250;
@@ -831,11 +884,21 @@ class CookieJarService {
 
   /// 检查 domain 是否匹配应用主域
   static bool matchesAppHost(String? domain) {
-    final baseHost = appBaseHost;
+    return matchesSiteHost(domain, appBaseHost);
+  }
+
+  /// 检查 Cookie domain 是否属于指定社区主域。
+  ///
+  /// 与 [matchesAppHost] 不同，此方法不读取全局当前站点，供站点切换期间仍在
+  /// 排水的旧请求使用，避免它们误把新站点 Cookie 当成自己的会话。
+  static bool matchesSiteHost(String? domain, String baseHost) {
+    final normalizedBaseHost = baseHost.trim().toLowerCase();
+    if (normalizedBaseHost.isEmpty) return false;
     final normalized = domain?.trim().replaceFirst(RegExp(r'^\.'), '');
     if (normalized == null || normalized.isEmpty) return true;
     final lower = normalized.toLowerCase();
-    return lower == baseHost || lower.endsWith('.$baseHost');
+    return lower == normalizedBaseHost ||
+        lower.endsWith('.$normalizedBaseHost');
   }
 
   /// Windows：通过页面级 controller 的 CDP 读取实时 cookie 值。
@@ -847,9 +910,13 @@ class CookieJarService {
     if (!io.Platform.isWindows) return null;
 
     try {
+      final siteUri =
+          Uri.tryParse(currentUrl ?? AppConstants.baseUrl) ??
+          Uri.parse(AppConstants.baseUrl);
       final rawCookies = await _readWindowsCookiesFromController(
         controller,
         currentUrl: currentUrl,
+        siteUri: siteUri,
       );
       String? fallback;
       for (final raw in rawCookies) {
@@ -857,7 +924,7 @@ class CookieJarService {
         final value = raw['value']?.toString() ?? '';
         final domain = raw['domain']?.toString();
         if (cookieName != name || value.isEmpty) continue;
-        if (matchesAppHost(domain)) {
+        if (matchesSiteHost(domain, siteUri.host)) {
           return value;
         }
         fallback ??= value;
@@ -888,6 +955,7 @@ class CookieJarService {
       final rawCookies = await _readWindowsCookiesFromController(
         controller,
         currentUrl: currentUrl,
+        siteUri: uri,
       );
       final filtered = rawCookies
           .where((raw) {
@@ -906,7 +974,7 @@ class CookieJarService {
             if (onlyValue != null && value != onlyValue) {
               return false;
             }
-            return matchesAppHost(domain);
+            return matchesSiteHost(domain, uri.host);
           })
           .toList(growable: false);
 
@@ -924,6 +992,7 @@ class CookieJarService {
           await enforceAuthCookiePolicy(
             reason: 'windows_cdp_sync',
             names: authNames,
+            siteUri: uri,
           );
         }
         return filtered.length;
@@ -973,6 +1042,7 @@ class CookieJarService {
         await enforceAuthCookiePolicy(
           reason: 'windows_controller_sync',
           names: authNames,
+          siteUri: uri,
         );
       }
       return toSave.length;
@@ -985,19 +1055,20 @@ class CookieJarService {
   Future<List<Map<String, dynamic>>> _readWindowsCookiesFromController(
     InAppWebViewController controller, {
     String? currentUrl,
+    required Uri siteUri,
   }) async {
-    final baseUri = Uri.parse(AppConstants.baseUrl);
-    final hosts = await getKnownHostsForDomain(baseUri.host);
+    final baseHost = siteUri.host.toLowerCase();
+    final hosts = await getKnownHostsForDomain(baseHost);
     final currentHost = Uri.tryParse(currentUrl ?? '')?.host;
     if (currentHost != null &&
         currentHost.isNotEmpty &&
-        matchesAppHost(currentHost)) {
+        matchesSiteHost(currentHost, baseHost)) {
       hosts.add(currentHost);
     }
 
     final urls = <String>{
-      AppConstants.baseUrl,
-      '${AppConstants.baseUrl}/',
+      siteUri.origin,
+      '${siteUri.origin}/',
       if (currentUrl != null && currentUrl.isNotEmpty) currentUrl,
       for (final host in hosts) 'https://$host',
       for (final host in hosts) 'https://$host/',
@@ -1016,7 +1087,7 @@ class CookieJarService {
         .whereType<Map>()
         .map((raw) => raw.map((key, value) => MapEntry(key.toString(), value)))
         .cast<Map<String, dynamic>>()
-        .where((raw) => matchesAppHost(raw['domain']?.toString()))
+        .where((raw) => matchesSiteHost(raw['domain']?.toString(), baseHost))
         .toList(growable: false);
   }
 }

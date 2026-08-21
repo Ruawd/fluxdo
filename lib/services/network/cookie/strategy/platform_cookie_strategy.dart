@@ -21,12 +21,27 @@ abstract class PlatformCookieStrategy {
 
   /// 从 WebView 读取指定 URL 的 cookie 列表
   /// 默认用 CookieManager.getCookies(url:)，Linux 覆写为 getAllCookies() 过滤
-  Future<List<Cookie>> readCookiesFromWebView(CookieManager cookieManager, String url);
+  Future<List<Cookie>> readCookiesFromWebView(
+    CookieManager cookieManager,
+    String url,
+  );
 
   /// 清除 WebView cookie store 中所有 cookie
-  Future<void> clearWebViewCookies(CookieManager cookieManager, Set<String> knownHosts);
+  Future<void> clearWebViewCookies(
+    CookieManager cookieManager,
+    Set<String> knownHosts,
+  );
+
+  /// 只清除指定站点及其子域 cookie；多社区账号切换/登出不能影响其他站点。
+  Future<void> clearWebViewCookiesForSite(
+    CookieManager cookieManager,
+    Set<String> knownHosts,
+    String baseUrl,
+  );
 
   /// 将原始 Set-Cookie 头批量写入 WebView
   /// 返回成功写入的条数
-  Future<int> writeRawCookiesToWebView(List<(String url, String rawHeader)> entries);
+  Future<int> writeRawCookiesToWebView(
+    List<(String url, String rawHeader)> entries,
+  );
 }

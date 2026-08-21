@@ -92,6 +92,55 @@ void main() {
       expect(cookieHeader, isEmpty);
     });
 
+    test('当前社区为 Linux.do 时仍能按请求域名发送 IDC Flare 会话', () async {
+      final jar = CookieJar();
+      await jar.saveFromResponse(Uri.parse('https://idcflare.com/'), [
+        Cookie('_t', 'idc-token')..path = '/',
+      ]);
+
+      final manager = AppCookieManager(jar);
+      final options = RequestOptions(
+        path: '/latest.json',
+        baseUrl: 'https://idcflare.com',
+        method: 'GET',
+      );
+
+      final cookieHeader = await manager.loadCookies(options);
+
+      expect(cookieHeader, '_t=idc-token');
+    });
+
+    test('Linux.do 与 IDC Flare 的同名会话 Cookie 不会串站', () async {
+      final jar = CookieJar();
+      await jar.saveFromResponse(Uri.parse('https://linux.do/'), [
+        Cookie('_t', 'linux-token')..path = '/',
+      ]);
+      await jar.saveFromResponse(Uri.parse('https://idcflare.com/'), [
+        Cookie('_t', 'idc-token')..path = '/',
+      ]);
+
+      final manager = AppCookieManager(jar);
+      final linuxHeader = await manager.loadCookies(
+        RequestOptions(
+          path: '/latest.json',
+          baseUrl: 'https://linux.do',
+          method: 'GET',
+        ),
+      );
+      final idcHeader = await manager.loadCookies(
+        RequestOptions(
+          path: '/latest.json',
+          baseUrl: 'https://idcflare.com',
+          method: 'GET',
+        ),
+      );
+
+      expect(linuxHeader, '_t=linux-token');
+      expect(linuxHeader, isNot(contains('idc-token')));
+      expect(idcHeader, '_t=idc-token');
+      expect(idcHeader, isNot(contains('linux-token')));
+    });
+
     test('非会话同名不同 path Cookie 仍按 RFC 同时发送', () async {
       final jar = CookieJar();
       final uri = Uri.parse('https://linux.do/session/csrf');

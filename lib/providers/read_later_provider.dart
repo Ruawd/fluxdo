@@ -6,25 +6,35 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/read_later_item.dart';
 import 'theme_provider.dart'; // sharedPreferencesProvider
+import '../services/active_site_service.dart';
 
 /// 稍后阅读列表最大数量
 const int maxReadLaterItems = 10;
 
 /// 稍后阅读状态管理
 class ReadLaterNotifier extends StateNotifier<List<ReadLaterItem>> {
-  static const String _storageKey = 'read_later_items';
-
   final SharedPreferences _prefs;
+  final String _storageKey;
 
-  ReadLaterNotifier(this._prefs) : super(_load(_prefs));
+  factory ReadLaterNotifier(SharedPreferences prefs) {
+    final key = ActiveSiteService.instance.scopedStorageKey('read_later_items');
+    return ReadLaterNotifier._(prefs, key);
+  }
+
+  ReadLaterNotifier._(SharedPreferences prefs, String storageKey)
+    : _prefs = prefs,
+      _storageKey = storageKey,
+      super(_load(prefs, storageKey));
 
   /// 从 SharedPreferences 加载列表
-  static List<ReadLaterItem> _load(SharedPreferences prefs) {
-    final jsonStr = prefs.getString(_storageKey);
+  static List<ReadLaterItem> _load(SharedPreferences prefs, String storageKey) {
+    final jsonStr = prefs.getString(storageKey);
     if (jsonStr == null) return [];
     try {
       final list = jsonDecode(jsonStr) as List;
-      return list.map((e) => ReadLaterItem.fromJson(e as Map<String, dynamic>)).toList();
+      return list
+          .map((e) => ReadLaterItem.fromJson(e as Map<String, dynamic>))
+          .toList();
     } catch (_) {
       return [];
     }
@@ -77,6 +87,6 @@ final appReadyProvider = StateProvider<bool>((ref) => false);
 
 final readLaterProvider =
     StateNotifierProvider<ReadLaterNotifier, List<ReadLaterItem>>((ref) {
-  final prefs = ref.watch(sharedPreferencesProvider);
-  return ReadLaterNotifier(prefs);
-});
+      final prefs = ref.watch(sharedPreferencesProvider);
+      return ReadLaterNotifier(prefs);
+    });

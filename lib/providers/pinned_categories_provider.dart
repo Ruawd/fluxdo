@@ -2,16 +2,27 @@
 import 'package:flutter_riverpod/legacy.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'theme_provider.dart';
+import '../services/active_site_service.dart';
 
 /// 已固定的分类 ID 列表（用于首页分类 Tab）
 class PinnedCategoriesNotifier extends StateNotifier<List<int>> {
-  static const _key = 'pinned_category_ids';
   final SharedPreferences _prefs;
+  final String _key;
 
-  PinnedCategoriesNotifier(this._prefs) : super(_load(_prefs));
+  factory PinnedCategoriesNotifier(SharedPreferences prefs) {
+    final key = ActiveSiteService.instance.scopedStorageKey(
+      'pinned_category_ids',
+    );
+    return PinnedCategoriesNotifier._(prefs, key);
+  }
 
-  static List<int> _load(SharedPreferences prefs) {
-    final list = prefs.getStringList(_key);
+  PinnedCategoriesNotifier._(SharedPreferences prefs, String key)
+    : _prefs = prefs,
+      _key = key,
+      super(_load(prefs, key));
+
+  static List<int> _load(SharedPreferences prefs, String key) {
+    final list = prefs.getStringList(key);
     if (list == null) return [];
     return list.map((s) => int.tryParse(s)).whereType<int>().toList();
   }
@@ -42,6 +53,6 @@ class PinnedCategoriesNotifier extends StateNotifier<List<int>> {
 
 final pinnedCategoriesProvider =
     StateNotifierProvider<PinnedCategoriesNotifier, List<int>>((ref) {
-  final prefs = ref.watch(sharedPreferencesProvider);
-  return PinnedCategoriesNotifier(prefs);
-});
+      final prefs = ref.watch(sharedPreferencesProvider);
+      return PinnedCategoriesNotifier(prefs);
+    });

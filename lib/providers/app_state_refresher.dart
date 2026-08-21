@@ -14,11 +14,14 @@ import 'message_bus/notification_providers.dart';
 import 'message_bus/topic_tracking_providers.dart';
 import 'ldc_providers.dart';
 import 'cdk_providers.dart';
+import '../constants.dart';
+import '../services/auth_session.dart';
 
 class AppStateRefresher {
   AppStateRefresher._();
 
   static DateTime? _lastRefreshTime;
+  static String? _lastRefreshSiteId;
 
   /// 调用方用 [ProviderScope.containerOf] 取 container 后传入，
   /// 避免 [Future.delayed] 闭包持有的 [WidgetRef] 在延迟期间随 widget unmount 失效，
@@ -26,10 +29,15 @@ class AppStateRefresher {
   static void refreshAll(ProviderContainer container) {
     // 去抖：2 秒内重复调用直接跳过（如 authStateProvider listener + _goToLogin 同时触发）
     final now = DateTime.now();
-    if (_lastRefreshTime != null && now.difference(_lastRefreshTime!) < const Duration(seconds: 2)) {
+    final siteId = AppConstants.site.id;
+    if (_lastRefreshSiteId == siteId &&
+        _lastRefreshTime != null &&
+        now.difference(_lastRefreshTime!) < const Duration(seconds: 2)) {
       return;
     }
     _lastRefreshTime = now;
+    _lastRefreshSiteId = siteId;
+    final requestGeneration = AuthSession().generation;
 
     // 第一批：主页渲染必需（用户信息 + 分类 + 话题列表）
     for (final refresh in _coreRefreshers) {
@@ -38,6 +46,9 @@ class AppStateRefresher {
     _refreshTopicTabs(container);
     // 第二批：延迟 1 秒执行，避免并发请求过多触发风控
     Future.delayed(const Duration(seconds: 1), () {
+      // 站点切换会销毁旧 ProviderContainer 并推进 generation。不要再对
+      // 已释放的旧容器执行 invalidate，也不要让旧站请求重新启动。
+      if (!AuthSession().isValid(requestGeneration)) return;
       for (final refresh in _deferredRefreshers) {
         refresh(container);
       }
@@ -67,8 +78,10 @@ class AppStateRefresher {
       container.read(tabTagsProvider(id).notifier).state = [];
     }
     container.read(activeCategorySlugsProvider.notifier).reset();
-    await container.read(ldcUserInfoProvider.notifier).disable();
-    await container.read(cdkUserInfoProvider.notifier).disable();
+    if (AppConstants.site.supportsLinuxDoEcosystem) {
+      await container.read(ldcUserInfoProvider.notifier).disable();
+      await container.read(cdkUserInfoProvider.notifier).disable();
+    }
   }
 
   /// 刷新话题列表各 tab
@@ -118,7 +131,15 @@ class AppStateRefresher {
     (c) => c.invalidate(notificationAlertChannelProvider),
     (c) => c.invalidate(latestChannelProvider),
     (c) => c.invalidate(messageBusInitProvider),
-    (c) => c.invalidate(ldcUserInfoProvider),
-    (c) => c.invalidate(cdkUserInfoProvider),
+    (c) {
+      if (AppConstants.site.supportsLinuxDoEcosystem) {
+        c.invalidate(ldcUserInfoProvider);
+      }
+    },
+    (c) {
+      if (AppConstants.site.supportsLinuxDoEcosystem) {
+        c.invalidate(cdkUserInfoProvider);
+      }
+    },
   ];
 }

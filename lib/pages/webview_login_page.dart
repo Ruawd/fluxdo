@@ -28,6 +28,7 @@ import '../services/login_ready_coordinator.dart';
 import 'package:common_ui/common_ui.dart';
 import '../l10n/s.dart';
 import '../utils/dialog_utils.dart';
+import '../config/discourse_site.dart';
 
 /// WebView 登录页面（统一使用 flutter_inappwebview）
 class WebViewLoginPage extends ConsumerStatefulWidget {
@@ -246,7 +247,7 @@ class _WebViewLoginPageState extends ConsumerState<WebViewLoginPage> {
                           urlRequest: URLRequest(
                             url: WebUri(
                               widget.initialUrl ??
-                                  '${AppConstants.baseUrl}/login',
+                                  AppConstants.site.preferredLoginUrl,
                             ),
                           ),
                         );
@@ -277,6 +278,10 @@ class _WebViewLoginPageState extends ConsumerState<WebViewLoginPage> {
                         _recheckCount = 0;
                         await WebViewSettings.injectScrollFix(controller);
                         _injectFingerprintHook(controller);
+                        await _syncIdentityProviderSession(
+                          controller,
+                          url?.toString(),
+                        );
                         // 自动填充登录表单
                         await _autoFillLoginForm(controller, url);
                         // 自动检测登录状态
@@ -479,6 +484,13 @@ class _WebViewLoginPageState extends ConsumerState<WebViewLoginPage> {
     String? currentUrl,
   }) async {
     if (_loginHandled || _loginInProgress) return;
+
+    // IDC Flare 的 OAuth 会先跳转到 Linux.do。如果在授权站页面读取到
+    // Linux.do 的 currentUser/_t 就提前收口，会把 Linux.do 会话误当成
+    // IDC Flare 登录态。必须等导航回目标社区主域后再检测。
+    currentUrl ??= (await controller.getUrl())?.toString();
+    if (!_isTargetSiteUrl(currentUrl)) return;
+
     _loginInProgress = true;
 
     try {
@@ -568,6 +580,31 @@ class _WebViewLoginPageState extends ConsumerState<WebViewLoginPage> {
       }
     } finally {
       _loginInProgress = false;
+    }
+  }
+
+  /// IDC Flare 通过 Linux.do OAuth 登录。授权页中 Linux.do 的会话可能刚
+  /// 完成续签；把核心登录 Cookie 按 Linux.do 域写回持久 jar，之后切回
+  /// Linux.do 时仍能恢复该账号，同时不会把它当作 IDC Flare 的登录态。
+  Future<void> _syncIdentityProviderSession(
+    InAppWebViewController controller,
+    String? currentUrl,
+  ) async {
+    final uri = Uri.tryParse(currentUrl ?? '');
+    if (uri == null) return;
+    final linkedSite = DiscourseSiteRegistry.byHost(uri.host);
+    if (linkedSite == null || linkedSite.id == AppConstants.site.id) return;
+
+    try {
+      await BoundarySyncService.instance.syncFromWebView(
+        currentUrl: currentUrl,
+        controller: controller,
+        cookieNames: CookieJarService.authCookieNames,
+        allowLowConfidenceSessionCookies: true,
+        requestGeneration: _flowGeneration,
+      );
+    } catch (e) {
+      debugPrint('[Login] 同步 ${linkedSite.displayName} 授权会话失败: $e');
     }
   }
 
@@ -1082,6 +1119,16 @@ class _WebViewLoginPageState extends ConsumerState<WebViewLoginPage> {
     final currentPath = _normalizePath(uri.path);
     final homePath = _normalizePath(_baseUri.path);
     return currentPath == homePath;
+  }
+
+  bool _isTargetSiteUrl(String? rawUrl) {
+    final uri = Uri.tryParse(rawUrl ?? '');
+    if (uri == null || uri.scheme != _baseUri.scheme) return false;
+    final host = uri.host.toLowerCase();
+    final baseHost = _baseUri.host.toLowerCase();
+    if (host != baseHost && host != 'www.$baseHost') return false;
+    if (uri.hasPort != _baseUri.hasPort) return false;
+    return !uri.hasPort || uri.port == _baseUri.port;
   }
 
   String _normalizePath(String path) {

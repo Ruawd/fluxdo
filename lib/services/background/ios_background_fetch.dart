@@ -10,6 +10,7 @@ import '../network/cookie/cookie_jar_service.dart';
 import '../network/cookie/csrf_token_service.dart';
 import '../network/discourse_dio.dart';
 import '../../models/notification.dart';
+import '../active_site_service.dart';
 
 /// iOS 后台任务标识符
 const String kNotificationPollTask = 'com.fluxdo.notificationPoll';
@@ -20,6 +21,9 @@ const String _kLastMessageId = 'bg_notification_last_message_id';
 const String _kLongPollingBaseUrl = 'bg_long_polling_base_url';
 const String _kSharedSessionKey = 'bg_shared_session_key';
 
+String _siteKey(String legacyKey) =>
+    ActiveSiteService.instance.scopedStorageKey(legacyKey);
+
 /// iOS 后台拉取回调（顶层函数，由 workmanager 在独立 Isolate 中调用）
 @pragma('vm:entry-point')
 void callbackDispatcher() {
@@ -27,24 +31,30 @@ void callbackDispatcher() {
     try {
       debugPrint('[iOSBgFetch] 开始执行后台任务: $taskName');
 
+      // 独立 Isolate 不会继承主 Isolate 的当前站点单例。必须先恢复站点，
+      // 再创建 Cookie/CSRF/Dio，否则 IDC Flare 后台任务会误请求 Linux.do。
+      final prefs = await SharedPreferences.getInstance();
+      await ActiveSiteService.instance.initialize(prefs);
+
       // 1. 初始化 Cookie 相关服务
       await CookieJarService().initialize();
       await CsrfTokenService().init();
 
       // 2. 从 SharedPreferences 读取 userId 和 lastMessageId
-      final prefs = await SharedPreferences.getInstance();
-      final userId = prefs.getInt(_kUserId);
+      final userId = prefs.getInt(_siteKey(_kUserId));
       if (userId == null) {
         debugPrint('[iOSBgFetch] 未找到 userId，跳过');
         return true;
       }
 
-      final lastMessageId = prefs.getInt(_kLastMessageId) ?? -1;
+      final lastMessageId = prefs.getInt(_siteKey(_kLastMessageId)) ?? -1;
       final channel = '/notification-alert/$userId';
 
       // 读取 MessageBus 独立域名配置
-      final longPollingBaseUrl = prefs.getString(_kLongPollingBaseUrl);
-      final sharedSessionKey = prefs.getString(_kSharedSessionKey);
+      final longPollingBaseUrl = prefs.getString(
+        _siteKey(_kLongPollingBaseUrl),
+      );
+      final sharedSessionKey = prefs.getString(_siteKey(_kSharedSessionKey));
 
       // 3. 创建临时 Dio，短超时单次轮询
       final dio = DiscourseDio.create(
@@ -143,7 +153,7 @@ void callbackDispatcher() {
 
       // 5. 持久化 lastMessageId
       if (newLastMessageId > lastMessageId) {
-        await prefs.setInt(_kLastMessageId, newLastMessageId);
+        await prefs.setInt(_siteKey(_kLastMessageId), newLastMessageId);
         debugPrint('[iOSBgFetch] 更新 lastMessageId: $newLastMessageId');
       }
 
@@ -180,14 +190,16 @@ bool _shouldDisableMessageBusCookies({
 
 /// 保存 userId 到 SharedPreferences（主 Isolate 调用）
 Future<void> saveBackgroundUserId(int userId) async {
+  final key = _siteKey(_kUserId);
   final prefs = await SharedPreferences.getInstance();
-  await prefs.setInt(_kUserId, userId);
+  await prefs.setInt(key, userId);
 }
 
 /// 保存 lastMessageId 到 SharedPreferences（主 Isolate 调用）
 Future<void> saveBackgroundLastMessageId(int lastMessageId) async {
+  final key = _siteKey(_kLastMessageId);
   final prefs = await SharedPreferences.getInstance();
-  await prefs.setInt(_kLastMessageId, lastMessageId);
+  await prefs.setInt(key, lastMessageId);
 }
 
 /// 保存 MessageBus 独立域名配置到 SharedPreferences（主 Isolate 调用）
@@ -195,15 +207,17 @@ Future<void> saveBackgroundMessageBusConfig({
   String? longPollingBaseUrl,
   String? sharedSessionKey,
 }) async {
+  final pollingUrlKey = _siteKey(_kLongPollingBaseUrl);
+  final sessionKey = _siteKey(_kSharedSessionKey);
   final prefs = await SharedPreferences.getInstance();
   if (longPollingBaseUrl != null) {
-    await prefs.setString(_kLongPollingBaseUrl, longPollingBaseUrl);
+    await prefs.setString(pollingUrlKey, longPollingBaseUrl);
   } else {
-    await prefs.remove(_kLongPollingBaseUrl);
+    await prefs.remove(pollingUrlKey);
   }
   if (sharedSessionKey != null) {
-    await prefs.setString(_kSharedSessionKey, sharedSessionKey);
+    await prefs.setString(sessionKey, sharedSessionKey);
   } else {
-    await prefs.remove(_kSharedSessionKey);
+    await prefs.remove(sessionKey);
   }
 }

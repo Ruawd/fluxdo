@@ -3,9 +3,10 @@ import 'dart:async';
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart' show compute;
 import 'package:flutter/material.dart';
-import '../constants.dart';
+import '../config/discourse_site.dart';
 import '../models/topic.dart';
 import '../models/category.dart';
+import 'active_site_service.dart';
 import 'network/discourse_dio.dart';
 import 'network/cookie/csrf_token_service.dart';
 import 'cf_challenge_service.dart';
@@ -17,13 +18,23 @@ import 'cf_clearance_refresh_service.dart';
 /// （内容是原始 JSON），旧版为元素属性 `data-preloaded="..."`（HTML 实体转义），
 /// 两种形态都支持。
 class PreloadedDataService {
-  static final PreloadedDataService _instance =
-      PreloadedDataService._internal();
-  factory PreloadedDataService() => _instance;
+  static final Map<String, PreloadedDataService> _instances = {};
+  factory PreloadedDataService() {
+    return forSite(ActiveSiteService.instance.current);
+  }
+
+  static PreloadedDataService forSite(DiscourseSite site) {
+    return _instances.putIfAbsent(
+      site.id,
+      () => PreloadedDataService._internal(site),
+    );
+  }
 
   final Dio _dio;
-  final CsrfTokenService _cookieSync = CsrfTokenService();
-  final CfChallengeService _cfChallenge = CfChallengeService();
+  final String _siteBaseUrl;
+  final bool _skipCsrfForHomeRequest;
+  final CsrfTokenService _cookieSync;
+  final CfChallengeService _cfChallenge;
 
   // 缓存的预加载数据
   Map<String, dynamic>? _currentUser;
@@ -49,8 +60,13 @@ class PreloadedDataService {
   bool _loaded = false;
   bool _loading = false;
 
-  PreloadedDataService._internal()
-    : _dio = DiscourseDio.create(
+  PreloadedDataService._internal(DiscourseSite site)
+    : _siteBaseUrl = site.baseUrl,
+      _skipCsrfForHomeRequest = site.skipCsrfForHomeRequest,
+      _cookieSync = CsrfTokenService.forSite(site),
+      _cfChallenge = CfChallengeService.forSite(site),
+      _dio = DiscourseDio.create(
+        baseUrl: site.baseUrl,
         defaultHeaders: {
           'Accept':
               'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
@@ -519,10 +535,10 @@ class PreloadedDataService {
       // 发起 HTTP 请求获取数据
       debugPrint('[PreloadedData] 发起 HTTP 请求');
       final response = await _dio.get(
-        AppConstants.baseUrl,
+        _siteBaseUrl,
         options: Options(
           headers: {'Accept': 'text/html'},
-          extra: {if (AppConstants.skipCsrfForHomeRequest) 'skipCsrf': true},
+          extra: {if (_skipCsrfForHomeRequest) 'skipCsrf': true},
         ),
       );
 
@@ -666,7 +682,7 @@ class PreloadedDataService {
   /// PreheatLogo 动画和预加载关键路径。未及时产出时 bootstrap 会降级为
   /// 自己 fetch 首页扫描，功能不受影响。
   void _extractPluginCandidatesInBackground(String html) {
-    final baseUrl = AppConstants.baseUrl;
+    final baseUrl = _siteBaseUrl;
     unawaited(() async {
       try {
         // 让当前解析流程先归还事件循环，避免在同一帧继续抢 UI isolate。
@@ -904,7 +920,10 @@ class PreloadedDataService {
     final completer = Completer<List<Map<String, dynamic>>?>();
     _topicTrackingStatesCompleter = completer;
     try {
-      final decoded = await compute(_decodeTopicTrackingStatesInIsolate, rawJson);
+      final decoded = await compute(
+        _decodeTopicTrackingStatesInIsolate,
+        rawJson,
+      );
       _topicTrackingStates = decoded;
       _topicTrackingStatesRawJson = null;
       debugPrint(
@@ -1020,7 +1039,8 @@ String? _extractPluginCandidateAround(String html, int pluginIndex) {
   }
 
   var end = pluginIndex + '/plugins/'.length;
-  while (end < html.length && !_isPluginCandidateBoundary(html.codeUnitAt(end))) {
+  while (end < html.length &&
+      !_isPluginCandidateBoundary(html.codeUnitAt(end))) {
     end++;
   }
 

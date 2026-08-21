@@ -1,6 +1,7 @@
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../config/discourse_site.dart';
 import '../utils/discourse_url_parser.dart';
 
 class ClipboardTopicLinkCandidate {
@@ -23,8 +24,8 @@ class ClipboardTopicLinkService {
   static const String lastPromptedHashPrefsKey =
       'pref_clipboard_topic_link_last_prompted_hash';
 
-  static final RegExp _linuxDoUrlRegex = RegExp(
-    r'(?:(?:https?:)?//)?(?:www\.)?linux\.do(?::\d+)?/[^\s<>"\]\)）}】》]+',
+  static final RegExp _communityUrlRegex = RegExp(
+    r'(?:(?:https?:)?//)?(?:www\.)?(?:linux\.do|idcflare\.com)(?::\d+)?/[^\s<>"\]\)）}】》]+',
     caseSensitive: false,
   );
 
@@ -75,7 +76,7 @@ class ClipboardTopicLinkService {
   }
 
   ClipboardTopicLinkCandidate? findFirstTopicLink(String text) {
-    for (final match in _linuxDoUrlRegex.allMatches(text)) {
+    for (final match in _communityUrlRegex.allMatches(text)) {
       final rawUrl = _trimTrailingPunctuation(match.group(0)!);
       if (!_hasValidLeadingBoundary(text, match.start)) continue;
 
@@ -166,8 +167,7 @@ class ClipboardTopicLinkService {
   }
 
   static bool _isAllowedHost(String host) {
-    final normalizedHost = host.toLowerCase();
-    return normalizedHost == 'linux.do' || normalizedHost == 'www.linux.do';
+    return DiscourseSiteRegistry.byHost(host) != null;
   }
 
   static bool _isSupportedTopicPath(String path) {

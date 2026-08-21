@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart';
 
 import 'preloaded_data_service.dart';
+import 'active_site_service.dart';
 import '../utils/url_helper.dart';
 import '../utils/emoji_shortcodes.dart';
 
@@ -11,9 +12,12 @@ import '../utils/emoji_shortcodes.dart';
 /// - 标准 emoji（如 heart、smile）：URL 确定性拼接 `/images/emoji/twitter/{name}.png`
 /// - 不依赖 `/emojis.json` API（该接口仅供 emoji picker 使用）
 class EmojiHandler {
-  static final EmojiHandler _instance = EmojiHandler._internal();
-  factory EmojiHandler() => _instance;
   EmojiHandler._internal();
+  static final Map<String, EmojiHandler> _instances = {};
+  factory EmojiHandler() {
+    final siteId = ActiveSiteService.instance.current.id;
+    return _instances.putIfAbsent(siteId, EmojiHandler._internal);
+  }
 
   /// 自定义 emoji 名称 -> URL 映射（对应 Discourse 的 extendedEmojiMap）
   Map<String, String>? _customEmojiMap;

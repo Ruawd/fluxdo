@@ -6,10 +6,13 @@ import '../pages/user_profile_page.dart';
 import '../pages/webview_login_page.dart';
 import '../pages/webview_page.dart';
 import '../constants.dart';
+import '../config/discourse_site.dart';
 import '../utils/discourse_url_parser.dart';
 import 'discourse/discourse_service.dart';
 import 'user_api_key_login_flow.dart';
 import 'user_api_key_service.dart';
+import 'active_site_service.dart';
+import 'site_switch_coordinator.dart';
 
 /// Deep Link 服务
 /// 处理从外部链接打开应用的场景
@@ -57,7 +60,7 @@ class DeepLinkService {
       if (uri != null) {
         // 延迟处理，确保导航 context 已就绪
         await Future.delayed(const Duration(milliseconds: 500));
-        _handleLink(uri);
+        await _handleLink(uri);
       }
     } catch (e) {
       debugPrint('DeepLinkService: 获取初始链接失败: $e');
@@ -66,20 +69,19 @@ class DeepLinkService {
 
   /// 处理外部或应用内链接，入口内会先校验可处理的 scheme 和 host
   void handleUri(Uri uri) {
-    _handleLink(uri);
+    unawaited(_handleLink(uri));
   }
 
   @visibleForTesting
   bool canHandleUri(Uri uri) => _canHandleUri(uri);
 
   /// 处理链接
-  void _handleLink(Uri uri) {
+  Future<void> _handleLink(Uri uri) async {
     if (_navigatorContext == null) {
       debugPrint('DeepLinkService: 导航 context 未就绪');
       return;
     }
 
-    final context = _navigatorContext!;
     final url = uri.toString();
 
     if (!_canHandleUri(uri)) {
@@ -99,6 +101,39 @@ class DeepLinkService {
     _lastHandledTime = now;
 
     debugPrint('DeepLinkService: 收到链接 $url');
+
+    // 链接属于另一个已注册社区时先切站，再用新 ProviderScope 的 context
+    // 打开原生页面，避免把 IDC Flare 的 topicId 请求到 Linux.do。
+    if (uri.scheme == 'http' || uri.scheme == 'https') {
+      final linkedSite = DiscourseSiteRegistry.byHost(uri.host);
+      if (linkedSite != null &&
+          linkedSite.id != ActiveSiteService.instance.current.id) {
+        final oldContext = _navigatorContext;
+        final result = await SiteSwitchCoordinator.instance.switchTo(
+          linkedSite,
+        );
+        if (result != SiteSwitchResult.switched &&
+            result != SiteSwitchResult.unchanged) {
+          debugPrint(
+            'DeepLinkService: 无法切换到 ${linkedSite.displayName}: $result',
+          );
+          return;
+        }
+        for (var i = 0; i < 12; i++) {
+          final next = _navigatorContext;
+          if (next != null && next.mounted && !identical(next, oldContext)) {
+            break;
+          }
+          await Future<void>.delayed(const Duration(milliseconds: 100));
+        }
+      }
+    }
+
+    final context = _navigatorContext;
+    if (context == null || !context.mounted) {
+      debugPrint('DeepLinkService: 切换后导航 context 尚未就绪');
+      return;
+    }
 
     // 浏览器授权登录回调:discourse://auth_redirect?payload=...
     // (discourse:// 是站点 auth_redirect 默认白名单 scheme,App 已注册)
@@ -146,14 +181,14 @@ class DeepLinkService {
     }
 
     // 邮箱链接登录：/session/email-login/{token}
-    if (uri.host == 'linux.do' &&
+    if (AppConstants.site.matchesHost(uri.host) &&
         uri.path.startsWith('/session/email-login/')) {
       _handleEmailLogin(context, url);
       return;
     }
 
-    // 其他 linux.do 链接：使用内置浏览器
-    if (uri.host == 'linux.do' || uri.host.endsWith('.linux.do')) {
+    // 当前社区的其他链接：使用内置浏览器
+    if (AppConstants.site.matchesHost(uri.host)) {
       WebViewPage.open(context, url);
       return;
     }
@@ -264,13 +299,6 @@ class DeepLinkService {
     // 浏览器授权登录回调(仅 auth_redirect,不接管其他 discourse:// 链接)
     if (uri.scheme == 'discourse' && uri.host == 'auth_redirect') return true;
     if (uri.scheme != 'http' && uri.scheme != 'https') return false;
-    return _isLinuxDoHost(uri.host);
-  }
-
-  static bool _isLinuxDoHost(String host) {
-    final normalizedHost = host.toLowerCase();
-    return normalizedHost == 'linux.do' ||
-        normalizedHost == 'www.linux.do' ||
-        normalizedHost.endsWith('.linux.do');
+    return DiscourseSiteRegistry.byHost(uri.host) != null;
   }
 }
