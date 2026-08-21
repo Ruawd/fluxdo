@@ -26,6 +26,10 @@ class SiteSwitchCoordinator {
   SiteSwitchCoordinator._();
   static final SiteSwitchCoordinator instance = SiteSwitchCoordinator._();
 
+  static const Duration _backgroundCleanupTimeout = Duration(seconds: 3);
+  static const Duration _oldSiteDrainTimeout = Duration(seconds: 4);
+  static const Duration _webViewStopTimeout = Duration(seconds: 5);
+
   Future<SiteSwitchResult>? _activeSwitch;
   bool get isSwitching => _activeSwitch != null;
 
@@ -58,12 +62,28 @@ class SiteSwitchCoordinator {
     var transitionStarted = false;
 
     try {
-      await BackgroundNotificationService().disable();
       MessageBusService().stopAll();
       AuthSession().advance();
 
-      await oldBrowserTrust.suspendForSiteSwitch();
-      await oldClearanceRefresh.stop();
+      // 三项资源彼此独立且实例都已绑定旧站点；并行收尾可把异常情况下的
+      // 最长等待限制在 5 秒，而不是把多个平台插件超时串行累加。
+      await Future.wait([
+        _bestEffortCleanup(
+          'background_notification',
+          BackgroundNotificationService().disable,
+          _backgroundCleanupTimeout,
+        ),
+        _bestEffortCleanup(
+          'browser_trust_drain',
+          oldBrowserTrust.suspendForSiteSwitch,
+          _oldSiteDrainTimeout,
+        ),
+        _bestEffortCleanup(
+          'cf_clearance_webview_stop',
+          oldClearanceRefresh.stop,
+          _webViewStopTimeout,
+        ),
+      ]);
       oldSessionRefresh.resetSessionState(reason: 'site_switch_out');
       WebViewCookiePriming.instance.invalidate();
 
@@ -126,6 +146,27 @@ class SiteSwitchCoordinator {
       if (transitionStarted) {
         activeSite.finishTransition();
       }
+    }
+  }
+
+  /// 旧站点收尾属于 best-effort：所有服务实例都已绑定旧域名，
+  /// 即使平台插件不回调，超时后继续也不会把数据写进新社区。
+  /// 不能让 Workmanager/WebView 的一次异常永久锁住整个 App。
+  Future<void> _bestEffortCleanup(
+    String phase,
+    Future<void> Function() cleanup,
+    Duration timeout,
+  ) async {
+    try {
+      await cleanup().timeout(timeout);
+    } on TimeoutException {
+      debugPrint(
+        '[SiteSwitch] 旧站点收尾超时，继续切换: '
+        'phase=$phase timeout=${timeout.inSeconds}s',
+      );
+    } catch (e, stackTrace) {
+      debugPrint('[SiteSwitch] 旧站点收尾失败，继续切换: phase=$phase error=$e');
+      debugPrintStack(stackTrace: stackTrace);
     }
   }
 }

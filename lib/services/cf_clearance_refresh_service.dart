@@ -57,6 +57,10 @@ class CfClearanceRefreshService {
   static const Duration _staleRefreshWindow = Duration(minutes: 8);
   static const Duration _restartDelay = Duration(seconds: 5);
   static const Duration _disposeGracePeriod = Duration(milliseconds: 150);
+  // iOS/Android 原生 WebView 偶尔不回传 dispose 结果。若无上限地
+  // await，社区切换会永久卡在“正在切换”。对象引用已在调用
+  // dispose 前摘除，超时后可安全让业务继续收口。
+  static const Duration _disposeTimeout = Duration(seconds: 4);
 
   /// 缓存的 sitekey（来自预热 HTML、登录 HTML 或 CF 403 响应体）。
   String? _sitekey;
@@ -559,7 +563,15 @@ document.close();
     }
 
     try {
-      await wv?.dispose();
+      final disposeFuture = wv?.dispose();
+      if (disposeFuture != null) {
+        await disposeFuture.timeout(_disposeTimeout);
+      }
+    } on TimeoutException {
+      CfChallengeLogger.log(
+        '[CfRefresh] WebView dispose 超时 '
+        '(${_disposeTimeout.inSeconds}s)，强制结束收口: $reason',
+      );
     } catch (e) {
       CfChallengeLogger.log('[CfRefresh] WebView dispose 异常: $e');
     } finally {
