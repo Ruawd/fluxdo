@@ -47,7 +47,7 @@ import '../widgets/layout/master_detail_layout.dart';
 import '../widgets/common/error_view.dart';
 import '../widgets/common/loading_dialog.dart';
 import '../widgets/common/fading_edge_scroll_view.dart';
-import '../widgets/common/predictive_back_cupertino_transitions.dart';
+import 'package:common_ui/common_ui.dart';
 import '../widgets/offline_indicator.dart';
 import '../l10n/s.dart';
 import '../models/shortcut_binding.dart';
@@ -1327,11 +1327,10 @@ class _TopicsPageState extends ConsumerState<TopicsPage>
               animation,
               secondaryAnimation,
               child,
-              // 搜索胶囊依赖 Hero 返回飞行:不用缩放预览,但认领手势
-              // (两端 Hero 已置 transitionOnUserGestures),fade +
-              // 胶囊 morph 由手势进度驱动。
-              useSharedElementPreview: false,
-              fallbackBuilder: (_, animation, _, child) =>
+              // 搜索胶囊靠 Hero 一镜到底,滑出会毁掉 morph,故用 fade;
+              // 认领手势是 Hero 跟手飞行的前提(两端已置
+              // transitionOnUserGestures)。手势期与按钮返回同一 fade。
+              transitionBuilder: (_, animation, _, child) =>
                   FadeTransition(opacity: animation, child: child),
             ),
       ),
@@ -2877,6 +2876,9 @@ class _TopicListState extends ConsumerState<_TopicList>
     final blockedUsernames = ref.watch(
       preferencesProvider.select((p) => p.normalizedBlockedUsernames),
     );
+    final showFilterHint = ref.watch(
+      preferencesProvider.select((p) => p.showFilterHint),
+    );
     _syncAutoLoadFilter(keywords, wholeWord, blockedUsernames);
     var hiddenCount = 0;
     var hiddenByBlocked = 0;
@@ -2967,7 +2969,7 @@ class _TopicListState extends ConsumerState<_TopicList>
           widget.categoryId,
         );
         final newTopicOffset = hasNewTopics ? 1 : 0;
-        final hintOffset = hiddenCount > 0 ? 1 : 0;
+        final hintOffset = (showFilterHint && hiddenCount > 0) ? 1 : 0;
         final headerOffset = newTopicOffset + hintOffset;
         final idToIndex = _visibleIndexMapFor(topics);
         // pill/过滤提示行出现或消失 = 全列表行 index 平移(数据身份未变,

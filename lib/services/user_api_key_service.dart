@@ -572,6 +572,7 @@ class UserApiKeyService {
             'skipCsrf': true,
             'skipAuthCheck': true,
             'skipRedirect': true,
+            'requestTag': 'otp-redeem',
           },
         ),
       );

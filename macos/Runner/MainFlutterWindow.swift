@@ -4,6 +4,10 @@ import WebKit
 import window_manager
 
 class MainFlutterWindow: NSWindow {
+  /// CGEvent 注入式 Cmd+V 的粘贴补丁(语音输入法/剪贴板管理器兼容)。
+  /// 详见 SyntheticPasteFix.swift 的文件头注释与上游 issue 184571。
+  private let syntheticPasteFix = SyntheticPasteFix()
+
   // 隐藏启动:XIB 窗口默认 visibleAtLaunch,直接显示会先落在 XIB 默认
   // 位置(800×600),等 Dart 端读完 window_state.json 才跳到恢复位置,
   // 产生肉眼可见的闪跳。这里在首次 order 时立刻隐藏窗口(与 Windows/
@@ -23,15 +27,13 @@ class MainFlutterWindow: NSWindow {
 
     RegisterGeneratedPlugins(registry: flutterViewController)
 
+    // CGEvent 注入的 Cmd+V(语音输入法/剪贴板管理器)在 Flutter macOS 上会被
+    // 框架吞掉,这里装一层只接管该形态的兜底。上游修复后可连同文件一并删除。
+    syntheticPasteFix.install()
+
     // 媒体转码通道(音视频压缩到 4MB:AVAssetWriter 硬编,零依赖)
     MediaTranscodeHandler.shared.register(
       messenger: flutterViewController.engine.binaryMessenger
-    )
-
-    // 渲染帧标识印记(窗口级原生层,机制见 RenderSignetHandler)
-    RenderSignetHandler.shared.register(
-      messenger: flutterViewController.engine.binaryMessenger,
-      window: self
     )
 
     // 注册 cookie 同步 channel，用于将 cookie 写入 HTTPCookieStorage.shared

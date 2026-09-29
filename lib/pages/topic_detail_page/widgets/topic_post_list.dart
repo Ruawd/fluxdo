@@ -21,7 +21,13 @@ import '../../../widgets/common/anchor_guard_sliver.dart';
 import '../../../widgets/post/post_item/widgets/post_voting_answer_header.dart';
 import 'package:m3e_ui/m3e_ui.dart';
 import 'package:fluxdo_render/fluxdo_render.dart'
-    show BlockNode, HtmlChunk, ParagraphWarmup, ParagraphWarmupProbe;
+    show
+        BlockNode,
+        HeadingAnchorRegistry,
+        HeadingAnchorScope,
+        HtmlChunk,
+        ParagraphWarmup,
+        ParagraphWarmupProbe;
 import '../../../widgets/post/post_item/post_item.dart';
 import '../../../widgets/post/post_item/render_parse_cache.dart';
 import '../../../widgets/post/post_item/segmented_long_post.dart';
@@ -32,6 +38,7 @@ import 'shared_issue_button.dart';
 import 'topic_more_topics.dart';
 import 'typing_indicator.dart';
 import 'pending_posts_section.dart';
+import 'private_message_participants.dart';
 
 /// 话题帖子列表
 /// 负责构建 CustomScrollView 及其 Slivers
@@ -53,6 +60,11 @@ class TopicPostList extends StatefulWidget {
   final int? selectedPostNumber;
   final int? highlightPostNumber;
   final bool isLoggedIn;
+  final int? removingPrivateMessageParticipantId;
+  final String? removingPrivateMessageGroupName;
+  final ValueChanged<TopicUser>? onRemovePrivateMessageParticipant;
+  final ValueChanged<TopicGroup>? onRemovePrivateMessageGroup;
+  final VoidCallback? onInvitePrivateMessageParticipants;
   final bool hasMoreBefore;
   final bool hasMoreAfter;
 
@@ -113,6 +125,10 @@ class TopicPostList extends StatefulWidget {
   /// 帖子"更多"菜单里"指定帖子"这一项是否显示。
   final bool canAssignPost;
 
+  /// 话题目录(TOC)的标题锚点注册表;非 null 时给 1 楼各段包
+  /// HeadingAnchorScope,标题挂载即注册(跳转/高亮定位用)。
+  final HeadingAnchorRegistry? headingAnchorRegistry;
+
   /// 问答话题排序(「N 个回答」头部的按票数/按活动 pill):
   /// null = 非问答话题不渲染头部
   final bool isActivitySort;
@@ -131,6 +147,11 @@ class TopicPostList extends StatefulWidget {
     this.hideHeaderTitle = false,
     this.canAssignPost = false,
     required this.isLoggedIn,
+    this.removingPrivateMessageParticipantId,
+    this.removingPrivateMessageGroupName,
+    this.onRemovePrivateMessageParticipant,
+    this.onRemovePrivateMessageGroup,
+    this.onInvitePrivateMessageParticipants,
     required this.hasMoreBefore,
     required this.hasMoreAfter,
     required this.loadingPreviousListenable,
@@ -168,6 +189,7 @@ class TopicPostList extends StatefulWidget {
     this.onWithdrawAndEditPendingPost,
     this.isActivitySort = false,
     this.onAnswerSortChanged,
+    this.headingAnchorRegistry,
   });
 
   @override
@@ -230,6 +252,20 @@ class _TopicPostListState extends State<TopicPostList> {
 
   int get _currentMaterializeStep =>
       ScrollBusySignal.isBusy ? _materializeBusyStep : _materializeIdleStep;
+
+  PrivateMessageParticipants _buildPrivateMessageParticipants(
+    PrivateMessageParticipantsLocation location,
+  ) {
+    return PrivateMessageParticipants.fromDetail(
+      location: location,
+      detail: detail,
+      removingParticipantId: widget.removingPrivateMessageParticipantId,
+      removingGroupName: widget.removingPrivateMessageGroupName,
+      onRemoveParticipant: widget.onRemovePrivateMessageParticipant,
+      onRemoveGroup: widget.onRemovePrivateMessageGroup,
+      onInvite: widget.onInvitePrivateMessageParticipants,
+    );
+  }
 
   void _scheduleMaterializeStep() {
     if (_materializeTicking) return;
@@ -421,6 +457,13 @@ class _TopicPostListState extends State<TopicPostList> {
 
     if (!scrollController.hasClients) return;
     final position = scrollController.position;
+    // 弹簧过冲(BouncingScrollPhysics 出界回弹)期间冻结上报:出界时
+    // remainingScroll 被压出正常区间,progress 被 clamp 到 0/1,eyeline
+    // 钉死在视口顶/底;过冲还会把列表边缘帖(最后一帖等)拉进视口,
+    // closest 兜底必命中它 —— 进度条瞬跳到 N/N(或视口顶帖),回弹才
+    // 恢复;visiblePosts 误报更会经 screenTrack 把末帖标记已读,污染
+    // 服务端 lastRead。回界后滚动通知会再次触发本方法,无需补偿。
+    if (position.outOfRange) return;
     final viewportHeight = position.viewportDimension;
 
     // 视口可见区域的上下边界
@@ -1301,6 +1344,18 @@ class _TopicPostListState extends State<TopicPostList> {
                 ),
               ),
 
+            // 对齐 Discourse bottom topic map：帖子流真正到底后再次展示私信成员。
+            if (!hasMoreAfter &&
+                PrivateMessageParticipants.shouldShowAtBottom(detail))
+              SliverToBoxAdapter(
+                child: _wrapContent(
+                  context,
+                  _buildPrivateMessageParticipants(
+                    PrivateMessageParticipantsLocation.bottom,
+                  ),
+                ),
+              ),
+
             SliverPadding(
               padding: EdgeInsets.only(
                 bottom: 80 + MediaQuery.of(context).padding.bottom,
@@ -1579,6 +1634,32 @@ class _TopicPostListState extends State<TopicPostList> {
         break;
     }
 
+    final childWithParticipants =
+        PrivateMessageParticipants.shouldShow(detail) &&
+            post.postNumber == 1 &&
+            (segment.type == _PostRenderSegmentType.shortPost ||
+                segment.type == _PostRenderSegmentType.longFooter)
+        ? Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              child,
+              _buildPrivateMessageParticipants(
+                PrivateMessageParticipantsLocation.firstPost,
+              ),
+            ],
+          )
+        : child;
+
+    // TOC 锚点作用域只挂 1 楼:节点 id 跨帖重复,其他楼的标题不能进
+    // 注册表(见 HeadingAnchorRegistrar/headingAnchorKey)。
+    final anchorRegistry = widget.headingAnchorRegistry;
+    final scopedChild = anchorRegistry != null && post.postNumber == 1
+        ? HeadingAnchorScope(
+            registry: anchorRegistry,
+            child: childWithParticipants,
+          )
+        : childWithParticipants;
+
     final wrapped = _wrapContent(
       context,
       AutoScrollTag(
@@ -1600,10 +1681,10 @@ class _TopicPostListState extends State<TopicPostList> {
                     onSortChanged: (byActivity) =>
                         widget.onAnswerSortChanged?.call(byActivity),
                   ),
-                  child,
+                  scopedChild,
                 ],
               )
-            : child,
+            : scopedChild,
       ),
     );
 
