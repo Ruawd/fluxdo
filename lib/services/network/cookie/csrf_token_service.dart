@@ -25,12 +25,8 @@ class CsrfTokenService {
   }
 
   CsrfTokenService._internal(DiscourseSite site)
-    : _site = site,
-      _siteBaseUrl = site.baseUrl,
-      _csrfTokenKey = site.scopedStorageKey('linux_do_csrf_token');
+    : _csrfTokenKey = site.scopedStorageKey('linux_do_csrf_token');
 
-  final DiscourseSite _site;
-  final String _siteBaseUrl;
   final String _csrfTokenKey;
 
   final ResilientSecureStorage _storage = ResilientSecureStorage();

@@ -26,7 +26,7 @@ void main() {
   final adapter = _CsrfAdapter();
   final dio = Dio(BaseOptions(baseUrl: 'https://linux.do'))
     ..httpClientAdapter = adapter;
-  dio.interceptors.add(RequestHeaderInterceptor(service));
+  dio.interceptors.add(RequestHeaderInterceptor(service, 'https://linux.do'));
   service.attachDio(dio);
 
   setUp(() {

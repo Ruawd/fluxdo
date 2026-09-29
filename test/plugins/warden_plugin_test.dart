@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:fluxdo/l10n/s.dart';
+import 'package:fluxdo/config/sites/linuxdo.dart';
 import 'package:fluxdo/models/category.dart';
 import 'package:fluxdo/services/local_notification_service.dart' show navigatorKey;
 import 'package:fluxdo/plugins/plugins.dart';
@@ -190,8 +191,11 @@ void main() {
   group('PluginRegistry.resolveMinPostLength', () {
     tearDown(PluginRegistry.resetOverride);
 
-    test('linux.do 默认注册了 warden 插件', () {
-      expect(PluginRegistry.plugins.whereType<WardenPlugin>(), isNotEmpty);
+    test('linux.do 站点配置注册了 warden 插件', () {
+      expect(
+        linuxdoCustomization.plugins.whereType<WardenPlugin>(),
+        isNotEmpty,
+      );
     });
 
     test('真实分类数据：搞七捻三回复要 16 字', () {

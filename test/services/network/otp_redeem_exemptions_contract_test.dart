@@ -125,7 +125,7 @@ Dio _buildDio(_RecordingAdapter adapter, {bool withRequestHeader = false}) {
     ),
   )..httpClientAdapter = adapter;
   if (withRequestHeader) {
-    dio.interceptors.add(RequestHeaderInterceptor(CsrfTokenService()));
+    dio.interceptors.add(RequestHeaderInterceptor(CsrfTokenService(), 'https://linux.do'));
   }
   dio.interceptors.add(RedirectInterceptor(dio));
   return dio;
